@@ -1,0 +1,176 @@
+# Reglas de zona: decide CONTRAENTREGA o PAGO ANTICIPADO según el destino.
+#
+# ⚠️ Es una BASE INICIAL basada en la logística (acceso terrestre y cobertura de
+# recaudo de las transportadoras), NO en datos de tus devoluciones. Edítala con lo
+# que vayas aprendiendo: si en un municipio te devuelven mucho, súbelo de nivel.
+# Después de editar, reinicia el Motor.
+#
+# Niveles de riesgo (de menor a mayor):
+#   normal          -> contraentrega
+#   lejano          -> anticipo parcial
+#   dificil_acceso  -> anticipo parcial más alto
+#   zona_roja       -> pago 100 % anticipado
+#
+# Prioridad de las reglas: barrio > ciudad > departamento > por_defecto.
+# Los nombres se comparan sin tildes y sin distinguir mayúsculas.
+
+politicas:
+  normal:
+    pago: contraentrega
+    anticipo_porcentaje: 0
+    anticipo_minimo: 0
+    explicacion_cliente: "Pagas cuando el paquete llegue a tu casa (contraentrega)."
+  lejano:
+    pago: anticipo_parcial
+    anticipo_porcentaje: 0.20
+    anticipo_minimo: 20000
+    explicacion_cliente: >-
+      Como tu zona queda un poco retirada para la transportadora, pedimos un pequeño
+      anticipo para separar el envío. El resto lo pagas al recibir.
+  dificil_acceso:
+    pago: anticipo_parcial
+    anticipo_porcentaje: 0.50
+    anticipo_minimo: 30000
+    explicacion_cliente: >-
+      A tu zona la transportadora llega con dificultad y no recauda el pago completo,
+      por eso pedimos la mitad por adelantado para despachar. El resto lo pagas al recibir.
+  zona_roja:
+    pago: anticipado_total
+    anticipo_porcentaje: 1.0
+    anticipo_minimo: 0
+    explicacion_cliente: >-
+      Para tu zona la transportadora no maneja pago contraentrega, así que el pedido
+      se paga por adelantado y te lo despachamos de inmediato.
+
+# Transportadoras sugeridas por nivel (la opción final y su costo exacto se
+# confirman con la cotización de Dropi al crear la orden).
+transportadoras:
+  normal: [Coordinadora, Envía, Interrapidísimo]
+  lejano: [Interrapidísimo, Servientrega, Envía]
+  dificil_acceso: [Interrapidísimo, Servientrega]
+  zona_roja: [Interrapidísimo, Servientrega]
+
+# Si el departamento no aparece en la lista:
+por_defecto: lejano
+
+departamentos:
+  antioquia:
+    riesgo: normal
+    ciudades:
+      # Municipios de Antioquia lejanos o de acceso difícil (ajusta según tu experiencia)
+      murindo: dificil_acceso
+      vigia del fuerte: dificil_acceso
+      ituango: lejano
+      briceno: lejano
+      segovia: lejano
+      remedios: lejano
+      zaragoza: lejano
+      el bagre: lejano
+      caceres: lejano
+      taraza: lejano
+      dabeiba: lejano
+      urrao: lejano
+      frontino: lejano
+      vegachi: lejano
+      yondo: lejano
+      puerto berrio: lejano
+      turbo: lejano
+      necocli: lejano
+      arboletes: lejano
+      san juan de uraba: lejano
+      mutata: lejano
+  bogota d c:
+    riesgo: normal
+  bogota:
+    riesgo: normal
+  cundinamarca:
+    riesgo: normal
+  valle del cauca:
+    riesgo: normal
+    ciudades:
+      buenaventura: lejano
+  valle:
+    riesgo: normal
+    ciudades:
+      buenaventura: lejano
+  risaralda:
+    riesgo: normal
+  caldas:
+    riesgo: normal
+  quindio:
+    riesgo: normal
+  santander:
+    riesgo: normal
+  norte de santander:
+    riesgo: normal
+  boyaca:
+    riesgo: normal
+  tolima:
+    riesgo: normal
+  huila:
+    riesgo: normal
+  meta:
+    riesgo: normal
+  atlantico:
+    riesgo: normal
+  bolivar:
+    riesgo: normal
+  magdalena:
+    riesgo: normal
+  cordoba:
+    riesgo: normal
+  sucre:
+    riesgo: normal
+  cesar:
+    riesgo: normal
+  la guajira:
+    riesgo: lejano
+    ciudades:
+      riohacha: normal
+      maicao: normal
+  cauca:
+    riesgo: lejano
+    ciudades:
+      popayan: normal
+  narino:
+    riesgo: lejano
+    ciudades:
+      pasto: normal
+      ipiales: normal
+      tumaco: dificil_acceso
+  choco:
+    riesgo: dificil_acceso
+    ciudades:
+      quibdo: lejano
+  casanare:
+    riesgo: lejano
+    ciudades:
+      yopal: normal
+  arauca:
+    riesgo: lejano
+  caqueta:
+    riesgo: lejano
+    ciudades:
+      florencia: normal
+  putumayo:
+    riesgo: lejano
+  guaviare:
+    riesgo: dificil_acceso
+  vichada:
+    riesgo: dificil_acceso
+  guainia:
+    riesgo: zona_roja
+  vaupes:
+    riesgo: zona_roja
+  amazonas:
+    riesgo: zona_roja
+  san andres y providencia:
+    riesgo: zona_roja
+  san andres:
+    riesgo: zona_roja
+
+# Barrios o sectores puntuales con problemas de entrega/devolución.
+# Llénalo SOLO con tu experiencia real (devoluciones, rechazos de la
+# transportadora). Formato:  "ciudad|barrio": nivel
+barrios: {}
+  # "medellin|ejemplo barrio": zona_roja

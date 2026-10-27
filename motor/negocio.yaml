@@ -1,0 +1,50 @@
+# Configuración del negocio (sin secretos: las claves van en .env).
+# Después de editar, reinicia el Motor.
+
+nombre_tienda: "LullaBites Colombia"
+ciudad: "Medellín"
+
+persona:
+  nombre: "Sofi"
+  rol: "asesora de ventas"
+  tono: "cálida, cercana y paisa sin exagerar; mensajes cortos; empática con quien duerme mal"
+
+pagos:
+  # manual = el cliente paga a tu llave Bre-B / cuenta Bancolombia y envía el
+  #          comprobante; tú lo verificas en tu app y lo confirmas en el panel.
+  # wompi  = link de pago de Wompi (Bancolombia) con confirmación automática
+  #          (requiere WOMPI_* en .env).
+  metodo: manual
+  manual:
+    # ⚠️ COMPLETA ESTOS DATOS antes de vender a zonas con anticipo.
+    llave_bre_b: ""          # ej: tu celular, cédula, correo o @llave registrada en Bancolombia
+    banco: "Bancolombia"
+    tipo_cuenta: "Ahorros"
+    numero_cuenta: ""        # ej: 123-456789-01
+    titular: ""              # nombre del titular
+    instrucciones: ""        # texto extra opcional
+  horas_para_pagar: 24       # después de esto, alerta para hacer seguimiento
+
+autonomia:
+  # false = tú apruebas cada pedido con un botón (recomendado al empezar).
+  auto_aprobar_pedidos: false
+  auto_max_valor: 150000
+  auto_solo_contraentrega: true
+  auto_solo_riesgo_normal: true
+
+conversacion:
+  espera_agrupar_seg: 4        # espera tras el último mensaje del cliente antes de responder
+  pausa_entre_mensajes_ms: 1200
+  historial_maximo: 40
+
+finanzas:
+  tasa_devolucion: 0.25        # devolución base contraentrega (ajústala con tus datos reales)
+  trm_cop_usd: 4000
+  margen_seguridad: 0.30
+  tasa_confirmacion: 0.85
+
+dropi:
+  modo: manual                 # cambia a "api" cuando Dropi te dé el token de integraciones
+
+notificar:
+  whatsapp_dueno: ""           # tu número personal, ej: 573001234567 (opcional)

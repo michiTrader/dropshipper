@@ -1,0 +1,13 @@
+# secretos y datos locales
+.env
+motor/.env
+motor/data/
+*.db
+*.db-wal
+*.db-shm
+# binarios
+motor/motor
+motor/motor.exe
+motor/bin/
+dist/
+node_modules/
