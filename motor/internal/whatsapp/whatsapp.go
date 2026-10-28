@@ -45,6 +45,47 @@ func (c *Client) endpoint(path string) string {
 	return strings.TrimRight(c.BaseURL, "/") + "/" + c.GraphVersion + "/" + strings.TrimLeft(path, "/")
 }
 
+// ErrNotConfigured means no WhatsApp credentials are set.
+var ErrNotConfigured = errors.New("WhatsApp no está configurado: faltan el token y el ID del número")
+
+// PhoneInfo describes the business number behind the credentials.
+type PhoneInfo struct {
+	DisplayPhone string `json:"numero"`
+	VerifiedName string `json:"nombre_verificado"`
+	Quality      string `json:"calidad"`
+}
+
+// Check proves token + phone number ID work by reading the number's profile.
+func (c *Client) Check(ctx context.Context) (PhoneInfo, error) {
+	if c == nil || c.Token == "" || c.PhoneNumberID == "" {
+		return PhoneInfo{}, ErrNotConfigured
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.endpoint(c.PhoneNumberID)+"?fields=display_phone_number,verified_name,quality_rating", nil)
+	if err != nil {
+		return PhoneInfo{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return PhoneInfo{}, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 {
+		return PhoneInfo{}, fmt.Errorf("WhatsApp HTTP %d: %s", resp.StatusCode, apiError(raw))
+	}
+	var out struct {
+		Display string `json:"display_phone_number"`
+		Name    string `json:"verified_name"`
+		Quality string `json:"quality_rating"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return PhoneInfo{}, fmt.Errorf("respuesta de WhatsApp inválida: %w", err)
+	}
+	return PhoneInfo{DisplayPhone: out.Display, VerifiedName: out.Name, Quality: out.Quality}, nil
+}
+
 // SendText sends a free-form text message (allowed inside the 24 h customer
 // service window). Returns the WhatsApp message id.
 func (c *Client) SendText(ctx context.Context, to, text string) (string, error) {

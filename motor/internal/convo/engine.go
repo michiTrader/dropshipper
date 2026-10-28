@@ -57,11 +57,12 @@ type Engine struct {
 	Agent   Responder
 	Sales   *sales.Service
 	WA      Sender
-	Negocio *config.Negocio
+	Negocio *config.Live
 	Events  *Broker
 	Log     *log.Logger
 
-	// Debounce and BubblePause override the negocio.yaml values (tests).
+	// Debounce and BubblePause override the live business settings (tests).
+	// Zero = use the settings; BubblePause < 0 disables the pause.
 	Debounce    time.Duration
 	BubblePause time.Duration
 
@@ -74,16 +75,53 @@ type Engine struct {
 }
 
 // NewEngine builds an engine with its own event broker.
-func NewEngine(st *store.Store, ag Responder, sv *sales.Service, wa Sender, neg *config.Negocio, lg *log.Logger) *Engine {
+func NewEngine(st *store.Store, ag Responder, sv *sales.Service, wa Sender, neg *config.Live, lg *log.Logger) *Engine {
 	if lg == nil {
 		lg = log.Default()
 	}
 	return &Engine{
 		Store: st, Agent: ag, Sales: sv, WA: wa, Negocio: neg, Events: NewBroker(), Log: lg,
-		Debounce:    neg.Conversacion.AgruparDuration(),
-		BubblePause: time.Duration(neg.Conversacion.PausaEntreMensajesMs) * time.Millisecond,
-		timers:      map[string]*time.Timer{}, locks: map[string]*sync.Mutex{}, pending: map[string]string{},
+		timers: map[string]*time.Timer{}, locks: map[string]*sync.Mutex{}, pending: map[string]string{},
 	}
+}
+
+func (e *Engine) neg() config.Negocio {
+	if e.Negocio == nil {
+		return config.DefaultNegocio()
+	}
+	return e.Negocio.Get()
+}
+
+func (e *Engine) debounce() time.Duration {
+	if e.Debounce != 0 {
+		if e.Debounce < 0 {
+			return 0
+		}
+		return e.Debounce
+	}
+	return e.neg().Conversacion.AgruparDuration()
+}
+
+func (e *Engine) bubblePause() time.Duration {
+	if e.BubblePause != 0 {
+		if e.BubblePause < 0 {
+			return 0
+		}
+		return e.BubblePause
+	}
+	return time.Duration(e.neg().Conversacion.PausaEntreMensajesMs) * time.Millisecond
+}
+
+// waReady reports whether WhatsApp can send right now. The sender may be a
+// hub whose credentials change while the Motor runs.
+func (e *Engine) waReady() bool {
+	if e.WA == nil {
+		return false
+	}
+	if a, ok := e.WA.(interface{ Available() bool }); ok {
+		return a.Available()
+	}
+	return true
 }
 
 // HandleInbound stores a customer message and schedules the AI answer.
@@ -144,7 +182,7 @@ func (e *Engine) schedule(phone string) {
 	if t, ok := e.timers[phone]; ok {
 		t.Stop()
 	}
-	e.timers[phone] = time.AfterFunc(e.Debounce, func() {
+	e.timers[phone] = time.AfterFunc(e.debounce(), func() {
 		e.mu.Lock()
 		delete(e.timers, phone)
 		if e.closed {
@@ -186,7 +224,7 @@ func (e *Engine) Reply(ctx context.Context, phone string) {
 	waID := e.pending[phone]
 	delete(e.pending, phone)
 	e.mu.Unlock()
-	if waID != "" && e.WA != nil && !contact.Simulated {
+	if waID != "" && e.waReady() && !contact.Simulated {
 		if err := e.WA.MarkRead(ctx, waID, true); err != nil {
 			e.Log.Printf("marcar leído %s: %v", phone, err)
 		}
@@ -227,7 +265,7 @@ func (e *Engine) Reply(ctx context.Context, phone string) {
 
 // pause waits a human-like time before a bubble (longer text, longer pause).
 func (e *Engine) pause(ctx context.Context, text string) {
-	d := e.BubblePause
+	d := e.bubblePause()
 	if d <= 0 {
 		return
 	}
@@ -254,7 +292,7 @@ func (e *Engine) deliver(ctx context.Context, c store.Contact, sender, text stri
 	if c.Simulated {
 		return e.Store.SetMessageWAID(ctx, m.ID, "", "simulado")
 	}
-	if e.WA == nil {
+	if !e.waReady() {
 		_ = e.Store.SetMessageWAID(ctx, m.ID, "", "sin_whatsapp")
 		return errors.New("WhatsApp no está configurado")
 	}
@@ -324,14 +362,14 @@ func (e *Engine) NotifyCustomer(ctx context.Context, phone, text string) error {
 // (if configured) and to the open panels.
 func (e *Engine) NotifyOwner(ctx context.Context, text string) {
 	e.Events.Publish(Event{Type: "alerta", Text: text})
-	owner := strings.TrimSpace(e.Negocio.Notificar.WhatsAppDueno)
-	if owner == "" || e.WA == nil {
+	owner := strings.TrimSpace(e.neg().Notificar.WhatsAppDueno)
+	if owner == "" || !e.waReady() {
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if _, err := e.WA.SendText(ctx, owner, "🤖 Dropshipper: "+text); err != nil {
+		if _, err := e.WA.SendText(ctx, owner, "Dropshipper: "+text); err != nil {
 			// Usually the owner has not written to the business number in the
 			// last 24 h (WhatsApp only allows free text inside that window).
 			e.Log.Printf("aviso al dueño: %v", err)

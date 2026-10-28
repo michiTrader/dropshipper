@@ -45,11 +45,11 @@ type LLMConfig struct {
 
 // WhatsAppConfig holds the WhatsApp Business Cloud API credentials.
 type WhatsAppConfig struct {
-	Token         string
-	PhoneNumberID string
-	VerifyToken   string
-	AppSecret     string
-	GraphVersion  string
+	Token         string `json:"token"`
+	PhoneNumberID string `json:"phone_number_id"`
+	VerifyToken   string `json:"verify_token"`
+	AppSecret     string `json:"app_secret"`
+	GraphVersion  string `json:"graph_version"`
 }
 
 // Enabled reports whether real WhatsApp sending is configured.
@@ -57,10 +57,10 @@ func (w WhatsAppConfig) Enabled() bool { return w.Token != "" && w.PhoneNumberID
 
 // WompiConfig holds Wompi (Bancolombia) credentials for automatic payment links.
 type WompiConfig struct {
-	PublicKey    string
-	PrivateKey   string
-	EventsSecret string
-	Sandbox      bool
+	PublicKey    string `json:"public_key"`
+	PrivateKey   string `json:"private_key"`
+	EventsSecret string `json:"events_secret"`
+	Sandbox      bool   `json:"sandbox"`
 }
 
 // Enabled reports whether automatic Wompi payment links can be created.
@@ -196,18 +196,19 @@ func LoadNegocio(path string) (Negocio, error) {
 	if err := yaml.Unmarshal(raw, &n); err != nil {
 		return n, fmt.Errorf("negocio.yaml inválido: %w", err)
 	}
-	n.applyDefaults()
+	n.ApplyDefaults()
 	return n, nil
 }
 
 // DefaultNegocio returns safe defaults (human approval for everything).
 func DefaultNegocio() Negocio {
 	n := Negocio{}
-	n.applyDefaults()
+	n.ApplyDefaults()
 	return n
 }
 
-func (n *Negocio) applyDefaults() {
+// ApplyDefaults fills missing values with safe defaults.
+func (n *Negocio) ApplyDefaults() {
 	if n.NombreTienda == "" {
 		n.NombreTienda = "Mi tienda"
 	}

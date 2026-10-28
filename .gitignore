@@ -11,3 +11,6 @@ motor/motor.exe
 motor/bin/
 dist/
 node_modules/
+
+# toolchain local
+.tools/

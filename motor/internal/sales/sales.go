@@ -32,6 +32,7 @@ type Notifier interface {
 
 // PaymentLinker creates automatic payment links (Wompi). Optional.
 type PaymentLinker interface {
+	LinksAvailable() bool
 	CreateLink(ctx context.Context, reference, description string, amount int64) (id, url string, err error)
 }
 
@@ -40,17 +41,26 @@ type Service struct {
 	Store    *store.Store
 	Catalog  *catalog.Catalog
 	Zones    *rules.ZoneRules
-	Negocio  *config.Negocio
+	Negocio  *config.Live
 	Notifier Notifier
-	Payments PaymentLinker // nil = manual payments (Bre-B / Bancolombia + comprobante)
+	Payments PaymentLinker // nil or unavailable = manual payments (Bre-B / Bancolombia + comprobante)
 	Now      func() time.Time
 
 	mu sync.Mutex // serialises state changes (webhook vs. owner vs. agent)
 }
 
+// neg returns the current business configuration (hot-reloadable).
+func (s *Service) neg() config.Negocio {
+	if s.Negocio == nil {
+		return config.DefaultNegocio()
+	}
+	return s.Negocio.Get()
+}
+
 // DraftInput is what the seller agent learned from the chat. Empty fields
 // keep the value already stored.
 type DraftInput struct {
+	ProductSKU   string `json:"producto_sku"`
 	OfferID      string `json:"oferta_id"`
 	Name         string `json:"nombre_completo"`
 	IDNumber     string `json:"cedula"`
@@ -87,7 +97,7 @@ func (s *Service) UpsertDraft(ctx context.Context, phone string, in DraftInput) 
 
 	o, err := s.Store.OpenOrderFor(ctx, phone)
 	if errors.Is(err, store.ErrNotFound) {
-		p := s.Catalog.Default()
+		p := s.productFor(in.ProductSKU)
 		o = store.Order{Phone: phone, Status: store.OrderDraft, ProductSKU: p.SKU, ProductName: p.Name}
 	} else if err != nil {
 		return DraftResult{}, err
@@ -108,6 +118,17 @@ func (s *Service) UpsertDraft(ctx context.Context, phone string, in DraftInput) 
 	product, ok := s.Catalog.Get(o.ProductSKU)
 	if !ok {
 		product = s.Catalog.Default()
+	}
+	// The customer may switch product before confirming: a draft takes the
+	// product the agent names (its offers and price then change with it).
+	if v := strings.TrimSpace(in.ProductSKU); v != "" && o.Status == store.OrderDraft && !strings.EqualFold(v, o.ProductSKU) {
+		if np, ok := s.Catalog.Get(v); ok && np.Active {
+			product = np
+			o.ProductSKU, o.ProductName = np.SKU, np.Name
+			o.OfferID, o.OfferLabel, o.Units, o.Total = "", "", 0, 0
+		} else {
+			warnings = append(warnings, fmt.Sprintf("producto_sku %q no existe o no está activo; usa uno de los productos del catálogo", v))
+		}
 	}
 	if v := strings.TrimSpace(in.OfferID); v != "" {
 		if offer, ok := product.Offer(v); ok {
@@ -187,12 +208,22 @@ func (s *Service) UpsertDraft(ctx context.Context, phone string, in DraftInput) 
 	return res, nil
 }
 
+// productFor returns the active product with that SKU, else the default one.
+func (s *Service) productFor(sku string) catalog.Product {
+	if sku = strings.TrimSpace(sku); sku != "" {
+		if p, ok := s.Catalog.Get(sku); ok && p.Active {
+			return p
+		}
+	}
+	return s.Catalog.Default()
+}
+
 func (in DraftInput) changesOrder(o store.Order) bool {
 	ch := func(newV, old string) bool {
 		newV = strings.TrimSpace(newV)
 		return newV != "" && !strings.EqualFold(newV, old)
 	}
-	return ch(in.OfferID, o.OfferID) || ch(in.Department, o.Department) || ch(in.City, o.City) ||
+	return ch(in.OfferID, o.OfferID) || ch(in.ProductSKU, o.ProductSKU) || ch(in.Department, o.Department) || ch(in.City, o.City) ||
 		ch(in.Address, o.Address) || ch(in.Neighborhood, o.Neighborhood) || ch(titleCase(in.Name), o.CustomerName) ||
 		(digits(in.IDNumber) != "" && digits(in.IDNumber) != o.CustomerIDNumber)
 }
@@ -215,15 +246,15 @@ func (s *Service) applyZone(o *store.Order, d rules.Decision, p catalog.Product)
 	if len(d.Carriers) > 0 {
 		o.Carrier = d.Carriers[0]
 	}
-	ret := rules.ReturnRateFor(s.Negocio.Finanzas.TasaDevolucion, d.Risk, d.Policy)
+	ret := rules.ReturnRateFor(s.neg().Finanzas.TasaDevolucion, d.Risk, d.Policy)
 	pr := rules.Profit(rules.ProfitInput{
 		Price: o.Total, UnitCost: p.UnitCost, Units: o.Units, Freight: p.Freight,
 		ReturnRate: ret, AdvancePaid: d.AdvanceAmount,
 	})
-	perOrder, _ := rules.MaxCPA(pr.BreakEvenCPA, s.Negocio.Finanzas.MargenSeguridad, s.Negocio.Finanzas.TasaConfirmacion)
+	perOrder, _ := rules.MaxCPA(pr.BreakEvenCPA, s.neg().Finanzas.MargenSeguridad, s.neg().Finanzas.TasaConfirmacion)
 	raw, _ := json.Marshal(Profit{
 		Result: pr, TargetCPA: perOrder, CostConfirmed: p.CostConfirmed,
-		ExpectedUSD: rules.COPtoUSD(pr.ExpectedProfit, s.Negocio.Finanzas.TRM), ReturnRateUsed: ret,
+		ExpectedUSD: rules.COPtoUSD(pr.ExpectedProfit, s.neg().Finanzas.TRM), ReturnRateUsed: ret,
 	})
 	o.ProfitJSON = string(raw)
 }
@@ -342,7 +373,7 @@ func (s *Service) Confirm(ctx context.Context, phone string) (ConfirmResult, err
 
 func (s *Service) paymentInstructions(ctx context.Context, o *store.Order) string {
 	amount := catalog.FormatCOP(o.AdvanceAmount)
-	if s.Negocio.Pagos.Metodo == "wompi" && s.Payments != nil {
+	if s.neg().Pagos.Metodo == "wompi" && s.Payments != nil && s.Payments.LinksAvailable() {
 		if o.PaymentLink == "" {
 			desc := fmt.Sprintf("Anticipo pedido %d - %s", o.ID, o.ProductName)
 			id, url, err := s.Payments.CreateLink(ctx, o.PaymentRef, desc, o.AdvanceAmount)
@@ -360,7 +391,7 @@ func (s *Service) paymentInstructions(ctx context.Context, o *store.Order) strin
 }
 
 func (s *Service) manualInstructions(o store.Order) string {
-	m := s.Negocio.Pagos.Manual
+	m := s.neg().Pagos.Manual
 	var b strings.Builder
 	fmt.Fprintf(&b, "💳 Para despachar tu pedido, el anticipo es de *$%s*.\n", catalog.FormatCOP(o.AdvanceAmount))
 	if m.LlaveBreB != "" {
@@ -407,7 +438,7 @@ func (s *Service) RegisterProof(ctx context.Context, phone, mediaPath string) (s
 	_ = s.Store.ResolvePhoneAlerts(ctx, phone, store.AlertPaymentProof)
 	_, _ = s.Store.AddAlert(ctx, store.Alert{Phone: phone, OrderID: o.ID, Kind: store.AlertPaymentProof,
 		Message: fmt.Sprintf("Comprobante recibido para el pedido #%d (anticipo $%s, ref %s). Verifica en tu banco y confirma el pago.", o.ID, catalog.FormatCOP(o.AdvanceAmount), o.PaymentRef)})
-	s.notifyOwner(ctx, fmt.Sprintf("📸 Comprobante recibido: pedido #%d de %s por $%s. Verifícalo en tu banco y confírmalo en el panel.", o.ID, o.CustomerName, catalog.FormatCOP(o.AdvanceAmount)))
+	s.notifyOwner(ctx, fmt.Sprintf("Comprobante recibido: pedido #%d de %s por $%s. Verifícalo en tu banco y confírmalo en el panel.", o.ID, o.CustomerName, catalog.FormatCOP(o.AdvanceAmount)))
 	return o, true, nil
 }
 
@@ -476,11 +507,11 @@ func (s *Service) onReadyForApproval(ctx context.Context, o store.Order) {
 	}
 	_, _ = s.Store.AddAlert(ctx, store.Alert{Phone: o.Phone, OrderID: o.ID, Kind: store.AlertApproval,
 		Message: fmt.Sprintf("Pedido #%d listo para aprobar: %s, %s ($%s, %s).", o.ID, o.CustomerName, o.City, catalog.FormatCOP(o.Total), o.PaymentPolicy)})
-	s.notifyOwner(ctx, fmt.Sprintf("🛒 Nuevo pedido por aprobar #%d: %s · %s · $%s · %s", o.ID, o.CustomerName, o.City, catalog.FormatCOP(o.Total), o.PaymentPolicy))
+	s.notifyOwner(ctx, fmt.Sprintf("Nuevo pedido por aprobar #%d: %s · %s · $%s · %s", o.ID, o.CustomerName, o.City, catalog.FormatCOP(o.Total), o.PaymentPolicy))
 }
 
 func (s *Service) canAutoApprove(o store.Order) (bool, string) {
-	a := s.Negocio.Autonomia
+	a := s.neg().Autonomia
 	if !a.AutoAprobarPedidos {
 		return false, ""
 	}
@@ -707,7 +738,7 @@ func (s *Service) FlagStalePayments(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	limit := time.Duration(s.Negocio.Pagos.HorasParaPagar) * time.Hour
+	limit := time.Duration(s.neg().Pagos.HorasParaPagar) * time.Hour
 	for _, o := range orders {
 		if o.ConfirmedAt == nil || s.now().Sub(*o.ConfirmedAt) < limit || strings.Contains(o.Notes, "[recordatorio-pago]") {
 			continue
@@ -717,7 +748,7 @@ func (s *Service) FlagStalePayments(ctx context.Context) {
 			continue
 		}
 		_, _ = s.Store.AddAlert(ctx, store.Alert{Phone: o.Phone, OrderID: o.ID, Kind: store.AlertInfo,
-			Message: fmt.Sprintf("El pedido #%d lleva más de %d h esperando el anticipo. Escríbele al cliente o cancélalo.", o.ID, s.Negocio.Pagos.HorasParaPagar)})
+			Message: fmt.Sprintf("El pedido #%d lleva más de %d h esperando el anticipo. Escríbele al cliente o cancélalo.", o.ID, s.neg().Pagos.HorasParaPagar)})
 	}
 }
 

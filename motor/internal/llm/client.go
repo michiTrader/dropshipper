@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -85,6 +87,8 @@ type Client struct {
 	APIKey     string
 	HTTP       *http.Client
 	MaxRetries int
+	// AllowNoKey lets keyless endpoints (a local Ollama) work.
+	AllowNoKey bool
 }
 
 // NewClient builds a client with sane timeouts.
@@ -98,26 +102,60 @@ func NewClient(baseURL, apiKey string) *Client {
 }
 
 // ErrNoAPIKey means the LLM is not configured.
-var ErrNoAPIKey = errors.New("IA sin API key: configura LLM_API_KEY (o DEEPSEEK_API_KEY) en motor/.env")
+var ErrNoAPIKey = errors.New("la IA no está configurada: agrega un proveedor con su clave en Conexiones (o con el comando 'motor ia agregar')")
+
+// authorize sets the auth header when a key exists.
+func (c *Client) authorize(req *http.Request) {
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+}
+
+// NormalizeBaseURL trims whitespace, trailing slashes and a pasted
+// "/chat/completions" (or "/models") suffix, so users can paste whatever
+// their provider's docs show.
+func NormalizeBaseURL(u string) string {
+	u = strings.TrimSpace(u)
+	u = strings.TrimRight(u, "/")
+	for _, suf := range []string{"/chat/completions", "/completions", "/models"} {
+		if strings.HasSuffix(strings.ToLower(u), suf) {
+			u = strings.TrimRight(u[:len(u)-len(suf)], "/")
+		}
+	}
+	return u
+}
+
+// ValidateBaseURL checks the URL is an absolute http(s) address.
+func ValidateBaseURL(u string) error {
+	u = strings.TrimSpace(u)
+	if u == "" {
+		return errors.New("falta la dirección (URL) del proveedor")
+	}
+	pu, err := url.Parse(u)
+	if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
+		return errors.New("la dirección debe empezar por https:// (por ejemplo https://api.deepseek.com)")
+	}
+	return nil
+}
 
 // Complete sends one chat completion request, retrying 429/5xx with backoff.
 func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
-	if c.APIKey == "" {
+	if c.APIKey == "" && !c.AllowNoKey {
 		return Response{}, ErrNoAPIKey
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return Response{}, err
 	}
-	url := c.BaseURL + "/chat/completions"
+	endpoint := c.BaseURL + "/chat/completions"
 	var lastErr error
 	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return Response{}, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+		c.authorize(httpReq)
 		resp, err := c.HTTP.Do(httpReq)
 		if err != nil {
 			lastErr = err
@@ -226,4 +264,83 @@ func Str(desc string) map[string]any { return map[string]any{"type": "string", "
 // Enum is a string property restricted to values.
 func Enum(desc string, values ...string) map[string]any {
 	return map[string]any{"type": "string", "description": desc, "enum": values}
+}
+
+// ListModels asks the provider for its model ids (GET /models).
+func (c *Client) ListModels(ctx context.Context) ([]string, error) {
+	if c.APIKey == "" && !c.AllowNoKey {
+		return nil, ErrNoAPIKey
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	c.authorize(req)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("IA HTTP %d: %s", resp.StatusCode, snippet(raw))
+	}
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Models []struct {
+			Name string `json:"name"`
+			ID   string `json:"id"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("respuesta de IA inválida: %w", err)
+	}
+	var out []string
+	for _, d := range parsed.Data {
+		if d.ID != "" {
+			out = append(out, d.ID)
+		}
+	}
+	for _, m := range parsed.Models {
+		n := m.ID
+		if n == "" {
+			n = strings.TrimPrefix(m.Name, "models/")
+		}
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// CheckResult is the outcome of a real, tiny connection test.
+type CheckResult struct {
+	Model     string `json:"modelo"`
+	Reply     string `json:"respuesta"`
+	LatencyMs int64  `json:"latencia_ms"`
+	Tokens    int    `json:"tokens"`
+}
+
+// Check sends a tiny real request (no retries) to prove URL, key and model work.
+func (c *Client) Check(ctx context.Context, model string) (CheckResult, error) {
+	cc := *c
+	cc.MaxRetries = 0
+	start := time.Now()
+	resp, err := cc.Complete(ctx, Request{
+		Model:     model,
+		Messages:  []Message{{Role: "user", Content: "Responde solo con la palabra: listo"}},
+		MaxTokens: 16,
+	})
+	if err != nil {
+		return CheckResult{}, err
+	}
+	return CheckResult{
+		Model:     model,
+		Reply:     strings.TrimSpace(resp.Message.Content),
+		LatencyMs: time.Since(start).Milliseconds(),
+		Tokens:    resp.Usage.TotalTokens,
+	}, nil
 }

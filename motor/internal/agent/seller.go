@@ -36,8 +36,37 @@ type Seller struct {
 	Store       *store.Store
 	Catalog     *catalog.Catalog
 	Zones       *rules.ZoneRules
-	Negocio     *config.Negocio
+	Negocio     *config.Live
 	Now         func() time.Time
+}
+
+func (s *Seller) neg() config.Negocio {
+	if s.Negocio == nil {
+		return config.DefaultNegocio()
+	}
+	return s.Negocio.Get()
+}
+
+// activeProducts is what the agent may sell right now (never empty if the
+// catalog has any product).
+func (s *Seller) activeProducts() []catalog.Product {
+	if ps := s.Catalog.Active(); len(ps) > 0 {
+		return ps
+	}
+	if d := s.Catalog.Default(); d.SKU != "" {
+		return []catalog.Product{d}
+	}
+	return nil
+}
+
+// productFor finds the product a tool call refers to (default when empty).
+func (s *Seller) productFor(sku string) catalog.Product {
+	if sku = strings.TrimSpace(sku); sku != "" {
+		if p, ok := s.Catalog.Get(sku); ok {
+			return p
+		}
+	}
+	return s.Catalog.Default()
 }
 
 // Reply is what the agent decided to say.
@@ -59,11 +88,12 @@ func (s *Seller) Respond(ctx context.Context, phone string) (Reply, error) {
 	if err != nil {
 		return Reply{}, err
 	}
-	history, err := s.Store.RecentMessages(ctx, phone, s.Negocio.Conversacion.HistorialMaximo)
+	history, err := s.Store.RecentMessages(ctx, phone, s.neg().Conversacion.HistorialMaximo)
 	if err != nil {
 		return Reply{}, err
 	}
-	msgs := []llm.Message{{Role: "system", Content: s.systemPrompt(ctx, contact)}}
+	n := s.neg()
+	msgs := []llm.Message{{Role: "system", Content: s.systemPrompt(ctx, contact, n)}}
 	msgs = append(msgs, toLLMHistory(history)...)
 	if len(msgs) == 1 || msgs[len(msgs)-1].Role != "user" {
 		// Nothing new from the customer: nothing to answer.
@@ -101,15 +131,24 @@ func (s *Seller) Respond(ctx context.Context, phone string) (Reply, error) {
 }
 
 func (s *Seller) tools() []llm.Tool {
-	offerIDs := make([]string, 0, len(s.Catalog.Default().Offers))
-	for _, o := range s.Catalog.Default().Offers {
-		offerIDs = append(offerIDs, o.ID)
+	var offerIDs, skus []string
+	seen := map[string]bool{}
+	for _, p := range s.activeProducts() {
+		skus = append(skus, p.SKU)
+		for _, o := range p.Offers {
+			if !seen[o.ID] {
+				seen[o.ID] = true
+				offerIDs = append(offerIDs, o.ID)
+			}
+		}
 	}
+	productProp := llm.Enum("SKU del producto que el cliente quiere (solo si hay más de uno en el catálogo)", skus...)
 	return []llm.Tool{
 		llm.Func("guardar_datos_pedido",
 			"Guarda o actualiza los datos del pedido del cliente a medida que los da (puedes llamarla varias veces; solo envía los campos nuevos o corregidos). Devuelve qué falta, advertencias, la política de pago según la zona y, cuando todo está completo, el resumen exacto que el cliente debe confirmar.",
 			llm.Obj(map[string]any{
-				"oferta_id":       llm.Enum("Oferta elegida por el cliente", offerIDs...),
+				"producto_sku":    productProp,
+				"oferta_id":       llm.Enum("Oferta elegida por el cliente (de la ficha del producto elegido)", offerIDs...),
 				"nombre_completo": llm.Str("Nombre y apellido"),
 				"cedula":          llm.Str("Número de cédula, solo dígitos"),
 				"celular":         llm.Str("Celular de contacto"),
@@ -129,6 +168,7 @@ func (s *Seller) tools() []llm.Tool {
 				"departamento": llm.Str("Departamento"),
 				"ciudad":       llm.Str("Ciudad o municipio"),
 				"barrio":       llm.Str("Barrio (opcional)"),
+				"producto_sku": productProp,
 				"oferta_id":    llm.Enum("Oferta para calcular el valor (por defecto la recomendada)", offerIDs...),
 			}, "departamento", "ciudad")),
 		llm.Func("escalar_a_humano",
@@ -184,21 +224,22 @@ func (s *Seller) dispatch(ctx context.Context, phone, name, args string, out *Re
 
 	case "consultar_envio":
 		var in struct {
-			Department, City, Neighborhood, OfferID string
+			Department, City, Neighborhood, OfferID, SKU string
 		}
 		var raw map[string]string
 		if err := json.Unmarshal([]byte(args), &raw); err != nil {
 			return "", fmt.Errorf("argumentos inválidos: %w", err)
 		}
 		in.Department, in.City, in.Neighborhood, in.OfferID = raw["departamento"], raw["ciudad"], raw["barrio"], raw["oferta_id"]
-		p := s.Catalog.Default()
+		in.SKU = raw["producto_sku"]
+		p := s.productFor(in.SKU)
 		offer, ok := p.Offer(in.OfferID)
 		if !ok {
 			offer = highlighted(p)
 		}
 		d := s.Zones.Decide(rules.Destination{Department: in.Department, City: in.City, Neighborhood: in.Neighborhood}, offer.Price)
 		return toJSON(map[string]any{
-			"ok": true, "oferta": offer.Label, "valor": offer.Price, "envio": d,
+			"ok": true, "producto": p.Name, "oferta": offer.Label, "valor": offer.Price, "envio": d,
 			"tiempo_entrega": deliveryTime(p, d.Risk),
 			"instruccion":    "Explica la forma de pago con la explicacion_cliente, en tus palabras y con amabilidad. No inventes otras condiciones.",
 		}), nil
@@ -215,7 +256,7 @@ func (s *Seller) dispatch(ctx context.Context, phone, name, args string, out *Re
 		_, _ = s.Store.AddAlert(ctx, store.Alert{Phone: phone, Kind: store.AlertEscalation,
 			Message: fmt.Sprintf("La IA pide tu ayuda (%s): %s", firstNonEmpty(in.Urgencia, "normal"), in.Motivo)})
 		if s.Sales.Notifier != nil {
-			s.Sales.Notifier.NotifyOwner(ctx, fmt.Sprintf("🙋 Un cliente (%s) necesita atención humana: %s", phone, in.Motivo))
+			s.Sales.Notifier.NotifyOwner(ctx, fmt.Sprintf("Un cliente (%s) necesita atención humana: %s", phone, in.Motivo))
 		}
 		out.Escalated = true
 		return toJSON(map[string]any{"ok": true, "instruccion": "Dile al cliente con amabilidad que en breve una persona del equipo le escribe o lo llama. No sigas vendiendo."}), nil
@@ -244,9 +285,12 @@ func (s *Seller) dispatch(ctx context.Context, phone, name, args string, out *Re
 	return "", fmt.Errorf("herramienta desconocida: %s", name)
 }
 
-func (s *Seller) systemPrompt(ctx context.Context, c store.Contact) string {
-	n := s.Negocio
-	p := s.Catalog.Default()
+func (s *Seller) systemPrompt(ctx context.Context, c store.Contact, n config.Negocio) string {
+	prods := s.activeProducts()
+	names := make([]string, 0, len(prods))
+	for _, p := range prods {
+		names = append(names, p.Name)
+	}
 	now := time.Now()
 	if s.Now != nil {
 		now = s.Now()
@@ -254,7 +298,7 @@ func (s *Seller) systemPrompt(ctx context.Context, c store.Contact) string {
 	co := now.In(time.FixedZone("COT", -5*3600))
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Eres %s, %s de la tienda online %s (Colombia). Atiendes clientes por WhatsApp que llegan por los anuncios de %s.\n", n.Persona.Nombre, n.Persona.Rol, n.NombreTienda, p.Name)
+	fmt.Fprintf(&b, "Eres %s, %s de la tienda online %s (Colombia). Atiendes clientes por WhatsApp que llegan por los anuncios de: %s.\n", n.Persona.Nombre, n.Persona.Rol, n.NombreTienda, strings.Join(names, ", "))
 	if n.Persona.Tono != "" {
 		fmt.Fprintf(&b, "Tono: %s\n", n.Persona.Tono)
 	}
@@ -266,6 +310,7 @@ Ayudar de verdad al cliente y cerrar la venta de forma natural y ética: entende
 # Reglas del sistema (prioridad máxima)
 - Responde SIEMPRE en español, en mensajes cortos de WhatsApp. Separa burbujas con una línea en blanco (máximo 3 burbujas).
 - No uses formato Markdown de títulos ni listas largas. Puedes usar *negrita* de WhatsApp con moderación.
+- Si hay varios productos en el catálogo, vende el que el cliente pregunta; si no está claro cuál quiere, pregúntaselo. Indica siempre producto_sku al guardar datos. No mezcles ofertas ni datos de un producto con otro.
 - Precios: usa SOLO los de las ofertas del catálogo. Nunca inventes descuentos, promociones, regalos ni urgencias.
 - Forma de pago y anticipos: los decide el sistema según la zona. Para saberlos usa consultar_envio o guardar_datos_pedido. Nunca prometas contraentrega sin consultarlo.
 - NUNCA escribas números de cuenta, llaves Bre-B ni links de pago: el sistema los envía solo, en un mensaje aparte.
@@ -279,9 +324,18 @@ Ayudar de verdad al cliente y cerrar la venta de forma natural y ética: entende
 
 `)
 	b.WriteString("# Conocimiento de ventas\n")
-	b.WriteString(s.Catalog.Playbook)
-	b.WriteString("\n\n# Ficha del producto\n")
-	b.WriteString(p.Sheet())
+	b.WriteString(s.Catalog.Playbook())
+	if len(prods) > 1 {
+		b.WriteString("\n\n# Catálogo (varios productos)\n")
+	} else {
+		b.WriteString("\n\n# Ficha del producto\n")
+	}
+	for i, p := range prods {
+		if i > 0 {
+			b.WriteString("\n---\n")
+		}
+		b.WriteString(p.Sheet())
+	}
 
 	b.WriteString("\n# Estado de este cliente\n")
 	if c.Name != "" {
@@ -292,7 +346,7 @@ Ayudar de verdad al cliente y cerrar la venta de forma natural y ética: entende
 		fmt.Fprintf(&b, "Tus notas sobre este cliente: %s\n", c.Notes)
 	}
 	if o, err := s.Store.OpenOrderFor(ctx, c.Phone); err == nil {
-		fmt.Fprintf(&b, "Pedido abierto #%d · estado: %s · oferta: %s · total: $%s\n", o.ID, o.Status, firstNonEmpty(o.OfferLabel, "sin elegir"), catalog.FormatCOP(o.Total))
+		fmt.Fprintf(&b, "Pedido abierto #%d · producto: %s · estado: %s · oferta: %s · total: $%s\n", o.ID, o.ProductName, o.Status, firstNonEmpty(o.OfferLabel, "sin elegir"), catalog.FormatCOP(o.Total))
 		if m := sales.Missing(o); len(m) > 0 {
 			fmt.Fprintf(&b, "Datos que faltan: %s\n", strings.Join(m, ", "))
 		}

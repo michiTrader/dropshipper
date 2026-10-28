@@ -1,15 +1,23 @@
-// Package catalog loads the product sheets and the sales playbook that make up
-// the seller agent's knowledge.
+// Package catalog holds the products and the sales guide (playbook) that make
+// up the seller agent's knowledge. Products live in the database, so they can
+// be edited from the panel or the terminal; the YAML files in knowledge/ only
+// seed the first run (and serve as import/export format).
 package catalog
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/michiTrader/dropshipper/motor/internal/store"
 )
 
 // Offer is one price option (1x, 2x, 3x...).
@@ -56,6 +64,9 @@ type Product struct {
 	Pains          []string    `yaml:"dolores" json:"dolores"`
 	Benefits       []string    `yaml:"beneficios" json:"beneficios"`
 	Objections     []Objection `yaml:"objeciones" json:"objeciones"`
+	// Active products are offered by the seller; inactive ones are kept
+	// (history, pending orders) but never sold. Stored beside the data.
+	Active bool `yaml:"-" json:"activo"`
 }
 
 // Offer returns the offer with the given id ("2x", "2", "2 frascos" all match 2x).
@@ -74,75 +85,366 @@ func (p Product) Offer(id string) (Offer, bool) {
 	return Offer{}, false
 }
 
-// Catalog is every product plus the playbook.
+const (
+	playbookKey = "playbook"
+	seededKey   = "_catalog_seeded"
+)
+
+// Catalog is every product plus the playbook. Safe for concurrent use.
 type Catalog struct {
-	Products []Product
-	Playbook string
+	st  *store.Store // nil = memory only (tests, tools)
+	dir string
+
+	mu       sync.RWMutex
+	products []Product
 	bySKU    map[string]Product
+	playbook string
 }
 
-// Load reads knowledge/productos/*.yaml and knowledge/playbook_ventas.md.
-func Load(dir string) (*Catalog, error) {
-	c := &Catalog{bySKU: map[string]Product{}}
+func newCatalog() *Catalog { return &Catalog{bySKU: map[string]Product{}} }
+
+// NormalizeSKU upper-cases and trims a SKU.
+func NormalizeSKU(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
+
+// ReadYAML parses and validates one product sheet.
+func ReadYAML(raw []byte) (Product, error) {
+	var p Product
+	if err := yaml.Unmarshal(raw, &p); err != nil {
+		return p, err
+	}
+	p.Active = true
+	if err := p.Validate(); err != nil {
+		return p, err
+	}
+	return p, nil
+}
+
+func loadYAMLDir(dir string) ([]Product, string, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "productos", "*.yaml"))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	sort.Strings(files)
+	var out []Product
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		var p Product
-		if err := yaml.Unmarshal(raw, &p); err != nil {
-			return nil, fmt.Errorf("%s: %w", filepath.Base(f), err)
+		p, err := ReadYAML(raw)
+		if err != nil {
+			return nil, "", fmt.Errorf("%s: %w", filepath.Base(f), err)
 		}
-		if err := p.validate(); err != nil {
-			return nil, fmt.Errorf("%s: %w", filepath.Base(f), err)
-		}
-		c.Products = append(c.Products, p)
-		c.bySKU[strings.ToUpper(p.SKU)] = p
+		out = append(out, p)
 	}
-	if len(c.Products) == 0 {
+	pb, _ := os.ReadFile(filepath.Join(dir, "playbook_ventas.md"))
+	return out, string(pb), nil
+}
+
+// Load reads knowledge/productos/*.yaml and playbook_ventas.md into a
+// memory-only catalog (no database). Used by tools and tests.
+func Load(dir string) (*Catalog, error) {
+	c := newCatalog()
+	ps, pb, err := loadYAMLDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(ps) == 0 {
 		return nil, fmt.Errorf("no hay productos en %s/productos", dir)
 	}
-	pb, err := os.ReadFile(filepath.Join(dir, "playbook_ventas.md"))
-	if err != nil {
-		return nil, fmt.Errorf("leer playbook: %w", err)
+	for _, p := range ps {
+		c.putLocked(p)
 	}
-	c.Playbook = string(pb)
+	c.playbook = pb
 	return c, nil
 }
 
-func (p Product) validate() error {
-	if p.SKU == "" || p.Name == "" {
-		return fmt.Errorf("producto sin sku o nombre")
+// Open returns the database-backed catalog. The first time (empty database)
+// it is seeded from the YAML files in dir; afterwards the database rules.
+func Open(ctx context.Context, st *store.Store, dir string) (*Catalog, error) {
+	c := newCatalog()
+	c.st, c.dir = st, dir
+	if _, err := st.GetSetting(ctx, seededKey); errors.Is(err, store.ErrNotFound) {
+		ps, pb, lerr := loadYAMLDir(dir)
+		if lerr != nil {
+			return nil, lerr
+		}
+		for _, p := range ps {
+			if err := c.persist(ctx, p); err != nil {
+				return nil, err
+			}
+		}
+		if pb != "" {
+			if err := st.SetSetting(ctx, playbookKey, pb); err != nil {
+				return nil, err
+			}
+		}
+		if err := st.SetSetting(ctx, seededKey, "1"); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	if err := c.Reload(ctx); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (c *Catalog) putLocked(p Product) {
+	key := NormalizeSKU(p.SKU)
+	if _, ok := c.bySKU[key]; !ok {
+		c.products = append(c.products, p)
+	} else {
+		for i := range c.products {
+			if NormalizeSKU(c.products[i].SKU) == key {
+				c.products[i] = p
+			}
+		}
+	}
+	c.bySKU[key] = p
+}
+
+// Reload re-reads products and playbook from the database.
+func (c *Catalog) Reload(ctx context.Context) error {
+	if c.st == nil {
+		return nil
+	}
+	rows, err := c.st.ListProductRows(ctx)
+	if err != nil {
+		return err
+	}
+	var list []Product
+	by := map[string]Product{}
+	for _, r := range rows {
+		var p Product
+		if err := json.Unmarshal([]byte(r.Data), &p); err != nil {
+			return fmt.Errorf("producto %s dañado: %w", r.SKU, err)
+		}
+		p.Active = r.Active
+		list = append(list, p)
+		by[NormalizeSKU(p.SKU)] = p
+	}
+	pb, err := c.st.GetSetting(ctx, playbookKey)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	c.mu.Lock()
+	c.products, c.bySKU, c.playbook = list, by, pb
+	c.mu.Unlock()
+	return nil
+}
+
+// Validate checks a product sheet; the message is shown to the owner.
+func (p Product) Validate() error {
+	if strings.TrimSpace(p.SKU) == "" {
+		return errors.New("el producto necesita un código (SKU), por ejemplo LULLA-60")
+	}
+	if strings.ContainsAny(p.SKU, " /\\?#%") {
+		return errors.New("el código (SKU) no puede tener espacios ni símbolos; usa letras, números y guiones")
+	}
+	if strings.TrimSpace(p.Name) == "" {
+		return fmt.Errorf("el producto %s necesita un nombre", p.SKU)
 	}
 	if len(p.Offers) == 0 {
-		return fmt.Errorf("producto %s sin ofertas", p.SKU)
+		return fmt.Errorf("el producto %s necesita al menos una oferta (por ejemplo 1 unidad a un precio)", p.SKU)
+	}
+	if p.UnitCost < 0 || p.Freight < 0 {
+		return errors.New("el costo y el flete no pueden ser negativos")
 	}
 	seen := map[string]bool{}
 	for _, o := range p.Offers {
-		if o.ID == "" || o.Price <= 0 || o.Units <= 0 {
-			return fmt.Errorf("producto %s: oferta inválida %+v", p.SKU, o)
+		if strings.TrimSpace(o.ID) == "" || o.Price <= 0 || o.Units <= 0 {
+			return fmt.Errorf("producto %s: cada oferta necesita identificador, unidades y precio mayores que cero", p.SKU)
 		}
 		if seen[strings.ToLower(o.ID)] {
-			return fmt.Errorf("producto %s: oferta repetida %s", p.SKU, o.ID)
+			return fmt.Errorf("producto %s: la oferta %s está repetida", p.SKU, o.ID)
 		}
 		seen[strings.ToLower(o.ID)] = true
 	}
 	return nil
 }
 
-// Get returns a product by SKU (case-insensitive).
+func (c *Catalog) persist(ctx context.Context, p Product) error {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	return c.st.SaveProductRow(ctx, store.ProductRow{SKU: NormalizeSKU(p.SKU), Data: string(raw), Active: p.Active})
+}
+
+// Save creates or updates a product (SKU is normalized to upper case).
+func (c *Catalog) Save(ctx context.Context, p Product) (Product, error) {
+	p.SKU = NormalizeSKU(p.SKU)
+	if err := p.Validate(); err != nil {
+		return p, err
+	}
+	if c.st != nil {
+		c.mu.RLock()
+		old, exists := c.bySKU[p.SKU]
+		c.mu.RUnlock()
+		_ = old
+		if !exists && len(c.products) == 0 {
+			p.Active = true
+		}
+		if err := c.persist(ctx, p); err != nil {
+			return p, err
+		}
+		return p, c.Reload(ctx)
+	}
+	c.mu.Lock()
+	c.putLocked(p)
+	c.mu.Unlock()
+	return p, nil
+}
+
+// SetActive turns a product on or off. At least one product must stay active,
+// otherwise the seller would have nothing to sell.
+func (c *Catalog) SetActive(ctx context.Context, sku string, active bool) error {
+	sku = NormalizeSKU(sku)
+	p, ok := c.Get(sku)
+	if !ok {
+		return store.ErrNotFound
+	}
+	if !active && p.Active {
+		others := 0
+		for _, o := range c.List() {
+			if o.Active && NormalizeSKU(o.SKU) != sku {
+				others++
+			}
+		}
+		if others == 0 {
+			return errors.New("debe quedar al menos un producto activo: activa otro antes de desactivar este")
+		}
+	}
+	p.Active = active
+	if c.st == nil {
+		c.mu.Lock()
+		c.putLocked(p)
+		c.mu.Unlock()
+		return nil
+	}
+	if err := c.persist(ctx, p); err != nil {
+		return err
+	}
+	return c.Reload(ctx)
+}
+
+// Delete removes a product. Products with orders cannot be deleted (their
+// history matters); deactivate them instead.
+func (c *Catalog) Delete(ctx context.Context, sku string) error {
+	sku = NormalizeSKU(sku)
+	p, ok := c.Get(sku)
+	if !ok {
+		return store.ErrNotFound
+	}
+	if c.st != nil {
+		n, err := c.st.CountOrdersForSKU(ctx, sku)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return fmt.Errorf("este producto tiene %d pedido(s): no se puede borrar para conservar el historial; desactívalo si ya no lo vendes", n)
+		}
+	}
+	if p.Active {
+		others := 0
+		for _, o := range c.List() {
+			if o.Active && NormalizeSKU(o.SKU) != sku {
+				others++
+			}
+		}
+		if others == 0 {
+			return errors.New("es el único producto activo: activa otro antes de borrarlo")
+		}
+	}
+	if c.st == nil {
+		c.mu.Lock()
+		delete(c.bySKU, sku)
+		out := c.products[:0:0]
+		for _, o := range c.products {
+			if NormalizeSKU(o.SKU) != sku {
+				out = append(out, o)
+			}
+		}
+		c.products = out
+		c.mu.Unlock()
+		return nil
+	}
+	if err := c.st.DeleteProductRow(ctx, sku); err != nil {
+		return err
+	}
+	return c.Reload(ctx)
+}
+
+// SetPlaybook replaces the sales guide text.
+func (c *Catalog) SetPlaybook(ctx context.Context, text string) error {
+	text = strings.TrimSpace(text)
+	if len(text) > 60000 {
+		return errors.New("la guía de ventas es demasiado larga (máximo 60.000 caracteres)")
+	}
+	if c.st == nil {
+		c.mu.Lock()
+		c.playbook = text
+		c.mu.Unlock()
+		return nil
+	}
+	if err := c.st.SetSetting(ctx, playbookKey, text); err != nil {
+		return err
+	}
+	return c.Reload(ctx)
+}
+
+// Playbook returns the sales guide text.
+func (c *Catalog) Playbook() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.playbook
+}
+
+// List returns every product (active or not) in display order.
+func (c *Catalog) List() []Product {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return append([]Product(nil), c.products...)
+}
+
+// Active returns only the products the seller may offer.
+func (c *Catalog) Active() []Product {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var out []Product
+	for _, p := range c.products {
+		if p.Active {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// Get returns a product by SKU (case-insensitive), active or not.
 func (c *Catalog) Get(sku string) (Product, bool) {
-	p, ok := c.bySKU[strings.ToUpper(strings.TrimSpace(sku))]
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	p, ok := c.bySKU[NormalizeSKU(sku)]
 	return p, ok
 }
 
-// Default returns the first product (the one being advertised today).
-func (c *Catalog) Default() Product { return c.Products[0] }
+// Default returns the first active product (the one advertised today); when
+// none is active, the first product; when empty, a zero Product.
+func (c *Catalog) Default() Product {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, p := range c.products {
+		if p.Active {
+			return p
+		}
+	}
+	if len(c.products) > 0 {
+		return c.products[0]
+	}
+	return Product{}
+}
 
 // Sheet renders a product as compact text for the system prompt.
 func (p Product) Sheet() string {

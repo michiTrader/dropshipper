@@ -1,0 +1,416 @@
+// Package settings holds everything the owner configures: AI providers,
+// WhatsApp, Wompi, security and business rules. The database is the single
+// source of truth; the panel and the terminal CLI both edit it, and a running
+// Motor notices changes made by the other side (Manager.Watch).
+package settings
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/michiTrader/dropshipper/motor/internal/config"
+	"github.com/michiTrader/dropshipper/motor/internal/llm"
+	"github.com/michiTrader/dropshipper/motor/internal/store"
+)
+
+// MinTokenLen is the shortest admin token accepted.
+const MinTokenLen = 8
+
+// Provider is one OpenAI-compatible AI endpoint.
+type Provider struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"nombre"`
+	Preset      string   `json:"preset,omitempty"`
+	BaseURL     string   `json:"base_url"`
+	APIKey      string   `json:"api_key"`
+	Model       string   `json:"modelo"`
+	Temperature *float64 `json:"temperatura,omitempty"`
+	NoKey       bool     `json:"sin_clave,omitempty"`
+}
+
+// Ready reports whether the provider has everything needed to be called.
+func (p Provider) Ready() bool {
+	return p.BaseURL != "" && p.Model != "" && (p.APIKey != "" || p.NoKey)
+}
+
+var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// Slug makes a short id out of a name.
+func Slug(s string) string {
+	s = strings.Trim(slugRe.ReplaceAllString(strings.ToLower(strings.TrimSpace(s)), "-"), "-")
+	if s == "" {
+		s = "proveedor"
+	}
+	if len(s) > 32 {
+		s = s[:32]
+	}
+	return s
+}
+
+// Validate normalizes and checks a provider, with owner-friendly errors.
+func (p *Provider) Validate() error {
+	if pr, ok := PresetByID(p.Preset); ok {
+		if p.BaseURL == "" {
+			p.BaseURL = pr.BaseURL
+		}
+		if p.Model == "" {
+			p.Model = pr.Model
+		}
+		if pr.NoKey {
+			p.NoKey = true
+		}
+		if p.Name == "" {
+			p.Name = pr.Name
+		}
+	}
+	p.BaseURL = llm.NormalizeBaseURL(p.BaseURL)
+	if err := llm.ValidateBaseURL(p.BaseURL); err != nil {
+		return err
+	}
+	p.APIKey = strings.TrimSpace(p.APIKey)
+	p.Model = strings.TrimSpace(p.Model)
+	p.Name = strings.TrimSpace(p.Name)
+	if p.Name == "" {
+		if u, err := url.Parse(p.BaseURL); err == nil {
+			p.Name = u.Hostname()
+		}
+	}
+	if p.ID == "" {
+		p.ID = Slug(p.Name)
+	}
+	if p.Model == "" {
+		return errors.New("falta el modelo (por ejemplo deepseek-chat); usa 'Cargar modelos' para ver los disponibles")
+	}
+	if p.APIKey == "" && !p.NoKey {
+		return errors.New("falta la clave (API key) del proveedor")
+	}
+	if p.Temperature != nil && (*p.Temperature < 0 || *p.Temperature > 2) {
+		return errors.New("la temperatura debe estar entre 0 y 2")
+	}
+	return nil
+}
+
+// IA is the list of AI providers and which one is active.
+type IA struct {
+	Providers []Provider `json:"proveedores"`
+	ActiveID  string     `json:"activo"`
+}
+
+// Provider finds a provider by id.
+func (ia IA) Provider(id string) (Provider, bool) {
+	for _, p := range ia.Providers {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return Provider{}, false
+}
+
+// NewID returns an unused id derived from name.
+func (ia IA) NewID(name string) string {
+	base := Slug(name)
+	id := base
+	for i := 2; ; i++ {
+		if _, ok := ia.Provider(id); !ok {
+			return id
+		}
+		id = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
+// General holds public URL and the panel access token.
+type General struct {
+	PublicURL  string `json:"url_publica"`
+	AdminToken string `json:"token_admin"`
+}
+
+// Settings is the complete configuration.
+type Settings struct {
+	IA       IA                    `json:"ia"`
+	WhatsApp config.WhatsAppConfig `json:"whatsapp"`
+	Wompi    config.WompiConfig    `json:"wompi"`
+	General  General               `json:"general"`
+	Negocio  config.Negocio        `json:"negocio"`
+}
+
+// Active returns the active provider (ok=false when none).
+func (s Settings) Active() (Provider, bool) {
+	return s.IA.Provider(s.IA.ActiveID)
+}
+
+// Validate checks cross-field rules; nil means safe to persist.
+func (s *Settings) Validate() error {
+	g := &s.General
+	g.PublicURL = strings.TrimRight(strings.TrimSpace(g.PublicURL), "/")
+	if g.PublicURL != "" {
+		u, err := url.Parse(g.PublicURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return errors.New("la dirección pública debe empezar por https:// (por ejemplo https://tienda.midominio.com)")
+		}
+	}
+	g.AdminToken = strings.TrimSpace(g.AdminToken)
+	if g.AdminToken != "" && len(g.AdminToken) < MinTokenLen {
+		return fmt.Errorf("el token de acceso debe tener al menos %d caracteres", MinTokenLen)
+	}
+	seen := map[string]bool{}
+	for i := range s.IA.Providers {
+		p := &s.IA.Providers[i]
+		if p.ID == "" {
+			return errors.New("proveedor de IA sin id")
+		}
+		if seen[p.ID] {
+			return fmt.Errorf("el proveedor %q está repetido", p.ID)
+		}
+		seen[p.ID] = true
+	}
+	if s.IA.ActiveID != "" {
+		if _, ok := s.IA.Provider(s.IA.ActiveID); !ok {
+			return fmt.Errorf("el proveedor activo %q no existe", s.IA.ActiveID)
+		}
+	}
+	n := &s.Negocio
+	n.ApplyDefaults()
+	if n.Pagos.Metodo != "manual" && n.Pagos.Metodo != "wompi" {
+		return errors.New("el método de pago debe ser 'manual' o 'wompi'")
+	}
+	if n.Dropi.Modo != "manual" && n.Dropi.Modo != "api" {
+		return errors.New("el modo de Dropi debe ser 'manual' o 'api'")
+	}
+	f := n.Finanzas
+	if f.TasaDevolucion < 0 || f.TasaDevolucion >= 1 {
+		return errors.New("la tasa de devolución debe estar entre 0% y 99%")
+	}
+	if f.TasaConfirmacion <= 0 || f.TasaConfirmacion > 1 {
+		return errors.New("la tasa de confirmación debe estar entre 1% y 100%")
+	}
+	if f.MargenSeguridad < 0 || f.MargenSeguridad >= 1 {
+		return errors.New("el margen de seguridad debe estar entre 0% y 99%")
+	}
+	if f.TRM <= 0 {
+		return errors.New("la TRM (pesos por dólar) debe ser mayor que cero")
+	}
+	if n.Autonomia.AutoMaxValor < 0 {
+		return errors.New("el valor máximo de auto-aprobación no puede ser negativo")
+	}
+	if n.Conversacion.EsperaAgruparSeg < 0 || n.Conversacion.HistorialMaximo < 4 {
+		return errors.New("revisa la espera de agrupación (≥0) y el historial (≥4 mensajes)")
+	}
+	return nil
+}
+
+// Seed builds first-run settings from .env/negocio.yaml values.
+func Seed(cfg *config.Config) Settings {
+	s := Settings{
+		WhatsApp: cfg.WhatsApp,
+		Wompi:    cfg.Wompi,
+		General:  General{PublicURL: cfg.PublicURL, AdminToken: cfg.AdminToken},
+		Negocio:  cfg.Negocio,
+	}
+	if len(s.General.AdminToken) < MinTokenLen {
+		s.General.AdminToken = ""
+	}
+	if cfg.LLM.APIKey != "" {
+		p := Provider{Name: "DeepSeek", Preset: "deepseek", BaseURL: cfg.LLM.BaseURL, APIKey: cfg.LLM.APIKey,
+			Model: cfg.LLM.Model, Temperature: cfg.LLM.Temperature}
+		if !strings.Contains(cfg.LLM.BaseURL, "deepseek") {
+			p.Name, p.Preset = "Proveedor de IA", "custom"
+		}
+		if p.Validate() == nil {
+			s.IA.Providers = []Provider{p}
+			s.IA.ActiveID = p.ID
+		}
+	}
+	return s
+}
+
+// NewToken makes a random access token.
+func NewToken() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// ---------- manager ----------
+
+const (
+	keyIA       = "ia"
+	keyWhatsApp = "whatsapp"
+	keyWompi    = "wompi"
+	keyGeneral  = "general"
+	keyNegocio  = "negocio"
+	keyReady    = "_seeded"
+)
+
+// Manager persists Settings and notifies listeners on every change.
+type Manager struct {
+	st *store.Store
+
+	mu       sync.RWMutex
+	cur      Settings
+	rev      int64
+	onChange []func(Settings)
+	writeMu  sync.Mutex
+}
+
+// Open loads settings, seeding them from seedFn the first time.
+func Open(ctx context.Context, st *store.Store, seedFn func() Settings) (*Manager, error) {
+	m := &Manager{st: st}
+	if _, err := st.GetSetting(ctx, keyReady); errors.Is(err, store.ErrNotFound) {
+		seed := seedFn()
+		if err := seed.Validate(); err != nil {
+			return nil, fmt.Errorf("configuración inicial inválida: %w", err)
+		}
+		if err := m.persist(ctx, seed); err != nil {
+			return nil, err
+		}
+		if err := st.SetSetting(ctx, keyReady, "1"); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	if _, err := m.Reload(ctx); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (m *Manager) persist(ctx context.Context, s Settings) error {
+	parts := map[string]any{keyIA: s.IA, keyWhatsApp: s.WhatsApp, keyWompi: s.Wompi, keyGeneral: s.General, keyNegocio: s.Negocio}
+	for k, v := range parts {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		if err := m.st.SetSetting(ctx, k, string(raw)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) load(ctx context.Context) (Settings, error) {
+	var s Settings
+	get := func(k string, dst any) error {
+		raw, err := m.st.GetSetting(ctx, k)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal([]byte(raw), dst)
+	}
+	s.Negocio = config.DefaultNegocio()
+	for k, dst := range map[string]any{keyIA: &s.IA, keyWhatsApp: &s.WhatsApp, keyWompi: &s.Wompi, keyGeneral: &s.General, keyNegocio: &s.Negocio} {
+		if err := get(k, dst); err != nil {
+			return s, fmt.Errorf("leer configuración %q: %w", k, err)
+		}
+	}
+	s.Negocio.ApplyDefaults()
+	return s, nil
+}
+
+// Get returns a copy of the current settings.
+func (m *Manager) Get() Settings {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cur
+}
+
+// AdminToken is the current panel token ("" = local-only access).
+func (m *Manager) AdminToken() string { return m.Get().General.AdminToken }
+
+// OnChange registers a listener called after every change (and immediately
+// once with the current settings).
+func (m *Manager) OnChange(fn func(Settings)) {
+	m.mu.Lock()
+	m.onChange = append(m.onChange, fn)
+	cur := m.cur
+	m.mu.Unlock()
+	fn(cur)
+}
+
+func (m *Manager) notify(s Settings) {
+	m.mu.RLock()
+	fns := append([]func(Settings){}, m.onChange...)
+	m.mu.RUnlock()
+	for _, fn := range fns {
+		fn(s)
+	}
+}
+
+// Update applies fn to a copy, validates, persists and notifies.
+func (m *Manager) Update(ctx context.Context, fn func(*Settings) error) error {
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+	// Start from what is in the DB so a terminal edit is never overwritten
+	// with a stale in-memory copy.
+	s, err := m.load(ctx)
+	if err != nil {
+		return err
+	}
+	if err := fn(&s); err != nil {
+		return err
+	}
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	if err := m.persist(ctx, s); err != nil {
+		return err
+	}
+	rev, _ := m.st.SettingsRevision(ctx)
+	m.mu.Lock()
+	m.cur, m.rev = s, rev
+	m.mu.Unlock()
+	m.notify(s)
+	return nil
+}
+
+// Reload re-reads the database; returns true if something changed.
+func (m *Manager) Reload(ctx context.Context) (bool, error) {
+	rev, err := m.st.SettingsRevision(ctx)
+	if err != nil {
+		return false, err
+	}
+	m.mu.RLock()
+	same := rev == m.rev && m.rev != 0
+	m.mu.RUnlock()
+	if same {
+		return false, nil
+	}
+	s, err := m.load(ctx)
+	if err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	m.cur, m.rev = s, rev
+	m.mu.Unlock()
+	m.notify(s)
+	return true, nil
+}
+
+// Watch polls for changes made by another process (the CLI) until ctx ends.
+func (m *Manager) Watch(ctx context.Context, every time.Duration, onReload func()) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if changed, err := m.Reload(ctx); err == nil && changed && onReload != nil {
+				onReload()
+			}
+		}
+	}
+}
