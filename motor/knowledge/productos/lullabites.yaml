@@ -1,0 +1,112 @@
+# Ficha de producto: lo que el agente Vendedor sabe de LullaBites.
+#
+# ⚠️ ANTES DE VENDER: confirma en Dropi el costo de proveedor, el flete y el ID
+# del producto, y cambia `costo_confirmado` a true. Mientras esté en false el
+# panel muestra una advertencia en cada pedido porque la rentabilidad es estimada.
+#
+# Precios en pesos colombianos (COP), sin puntos ni comas.
+
+sku: LULLA-60
+nombre: LullaBites
+categoria: Bienestar y descanso
+descripcion_corta: >-
+  Gomitas masticables con ingredientes naturales que ayudan a relajarte, conciliar
+  el sueño y descansar profundamente, sin sensación de pesadez al despertar.
+presentacion: Frasco con 60 gomitas sabor fresa (30 porciones de 2 gomitas). Vegano, sin azúcar.
+ingredientes:
+  - "5-HTP: precursor natural de la serotonina, relacionada con el estado de ánimo y el ciclo del sueño"
+  - "L-teanina: aminoácido del té verde que favorece la relajación sin dar sueño pesado"
+  - "Magnesio: contribuye a la relajación muscular y del sistema nervioso"
+  - "Raíz de valeriana: planta usada tradicionalmente para el descanso"
+  - "Pasiflora: planta usada tradicionalmente para calmar la mente"
+sin_melatonina: true
+modo_uso: >-
+  2 gomitas al día, 30 a 60 minutos antes de acostarse. No exceder la porción
+  recomendada. Para mejores resultados, acompañar con una rutina de sueño
+  (pantallas apagadas, horario fijo).
+sensacion: >-
+  La mayoría de personas nota que le cuesta menos "apagar la mente" y quedarse
+  dormida. Como no tiene melatonina, no suele dejar sensación de resaca o pesadez
+  al día siguiente. Los resultados varían según cada persona.
+precauciones:
+  - Es un suplemento dietario, NO es un medicamento y no reemplaza un tratamiento médico.
+  - No recomendado para menores de edad, embarazadas ni mujeres lactando.
+  - Si la persona toma antidepresivos, ansiolíticos, medicamentos para dormir u otros medicamentos psiquiátricos, debe consultar con su médico antes de tomarlo (el 5-HTP puede interactuar con ellos).
+  - Si tiene una enfermedad crónica o está en tratamiento médico, consultar con su médico.
+  - Puede causar somnolencia, no manejar ni operar maquinaria después de tomarlo.
+  - Mantener fuera del alcance de los niños (parecen dulces).
+
+ofertas:
+  - id: "1x"
+    etiqueta: "1 frasco (30 noches)"
+    unidades: 1
+    precio: 89900
+  - id: "2x"
+    etiqueta: "2 frascos (60 noches) - el más pedido"
+    unidades: 2
+    precio: 149900
+    destacada: true
+  - id: "3x"
+    etiqueta: "3 frascos (90 noches) - mejor precio por noche"
+    unidades: 3
+    precio: 199900
+
+# Economía por unidad (CONFIRMAR EN DROPI)
+costo_proveedor: 35000
+flete_estimado: 15000
+costo_confirmado: false
+dropi_product_id: ""
+
+envio:
+  tiempo_ciudades_principales: "2 a 4 días hábiles"
+  tiempo_otras_zonas: "4 a 7 días hábiles"
+  costo_para_cliente: "Envío GRATIS"
+
+garantia: >-
+  Si el producto llega en mal estado o con el sello roto, se cambia sin costo.
+  El cliente puede revisar el paquete por fuera al recibirlo.
+
+dolores:
+  - Dar vueltas en la cama sin poder dormir, la mente no se apaga
+  - Despertarse varias veces en la noche
+  - Levantarse cansado, sin energía, de mal genio
+  - Estrés, ansiedad o preocupaciones que no dejan descansar
+  - Miedo a las pastillas para dormir (dependencia, quedar "tumbado" al otro día)
+  - Rendir poco en el trabajo o el estudio por mal descanso
+
+beneficios:
+  - Ayuda a relajarte y conciliar el sueño más fácil
+  - Descanso más profundo
+  - Te levantas sin pesadez porque no tiene melatonina
+  - Ingredientes naturales, vegano y sin azúcar
+  - Rico sabor a fresa, es una gomita, no una pastilla
+  - Menos de $3.000 por noche (en la oferta de 2 frascos sale a unos $2.500)
+
+objeciones:
+  - objecion: "Está caro"
+    respuesta: >-
+      Reencuadrar el valor: en la oferta de 2 frascos sale a unos $2.500 por noche,
+      menos que un tinto. Preguntar cuánto le cuesta al día dormir mal (energía,
+      genio, rendimiento). Ofrecer la opción de 1 frasco si el presupuesto es corto.
+  - objecion: "¿Y si no me funciona?"
+    respuesta: >-
+      Ser honesto: los resultados varían, por eso se recomienda usarlo al menos 2
+      semanas con una rutina de sueño. Contar que la mayoría nota cambios en los
+      primeros días. No prometer resultados garantizados.
+  - objecion: "¿Es una droga? ¿Crea dependencia?"
+    respuesta: >-
+      Es un suplemento con ingredientes naturales, sin melatonina. No es un
+      medicamento para dormir. Recordar las precauciones si toma medicamentos.
+  - objecion: "¿Es original? ¿Es una estafa?"
+    respuesta: >-
+      Llega con sello de seguridad, y en la mayoría de ciudades se paga
+      contraentrega, cuando el paquete llega a la casa. Así no arriesga nada.
+  - objecion: "Lo voy a pensar"
+    respuesta: >-
+      Respetar. Preguntar con empatía qué le genera duda (precio, confianza,
+      salud) para resolverlo. Si sigue en duda, dejar la puerta abierta sin presionar.
+  - objecion: "¿Por qué tengo que pagar antes?"
+    respuesta: >-
+      Explicar con amabilidad que en su zona la transportadora no recauda dinero o
+      el acceso es difícil, por eso se pide un anticipo para separar el envío. El
+      resto (si aplica) se paga al recibir.

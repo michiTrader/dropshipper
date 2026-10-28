@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f172a">
+  <title>Dropshipper · Panel</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <form id="loginForm" class="card login-card">
+      <h1>🌙 Dropshipper</h1>
+      <p>Ingresa el token del panel (ADMIN_TOKEN de tu archivo <code>.env</code>).</p>
+      <input id="tokenInput" type="password" placeholder="Token" autocomplete="current-password" required>
+      <button class="btn primary" type="submit">Entrar</button>
+      <p id="loginError" class="error"></p>
+    </form>
+  </div>
+
+  <div id="app" class="layout hidden">
+    <aside class="sidebar">
+      <div class="brand">🌙 <span>Dropshipper</span></div>
+      <nav id="nav">
+        <a href="#inicio" data-view="inicio">🏠 <span>Inicio</span></a>
+        <a href="#aprobaciones" data-view="aprobaciones">✅ <span>Aprobaciones</span> <b class="badge" id="badgeAprob"></b></a>
+        <a href="#chats" data-view="chats">💬 <span>Conversaciones</span> <b class="badge" id="badgeChats"></b></a>
+        <a href="#pedidos" data-view="pedidos">📦 <span>Pedidos</span></a>
+        <a href="#simulador" data-view="simulador">🧪 <span>Simulador</span></a>
+        <a href="#producto" data-view="producto">💰 <span>Producto y finanzas</span></a>
+        <a href="#ajustes" data-view="ajustes">⚙️ <span>Ajustes</span></a>
+      </nav>
+      <div class="sidebar-foot" id="liveDot" title="Conexión en vivo">● en vivo</div>
+    </aside>
+
+    <main id="main">
+      <!-- INICIO -->
+      <section id="view-inicio" class="view">
+        <header class="view-head"><h2>Inicio</h2><span class="muted" id="today"></span></header>
+        <div id="setupWarnings"></div>
+        <div class="kpis" id="kpis"></div>
+        <div class="grid2">
+          <div class="card"><h3>🔔 Pendientes</h3><div id="alertList" class="list"></div></div>
+          <div class="card"><h3>💬 Chats recientes</h3><div id="recentChats" class="list"></div></div>
+        </div>
+      </section>
+
+      <!-- APROBACIONES -->
+      <section id="view-aprobaciones" class="view">
+        <header class="view-head"><h2>Aprobaciones</h2><span class="muted">La IA deja todo listo, tú das el visto bueno.</span></header>
+        <h3 class="section-title">Pedidos listos para despachar</h3>
+        <div id="approvalCards" class="cards"></div>
+        <h3 class="section-title">Pagos por verificar</h3>
+        <div id="paymentCards" class="cards"></div>
+        <h3 class="section-title">Aprobados: súbelos a Dropi</h3>
+        <div id="dispatchCards" class="cards"></div>
+      </section>
+
+      <!-- CONVERSACIONES -->
+      <section id="view-chats" class="view">
+        <div class="chat-layout">
+          <div class="chat-list card">
+            <input id="chatSearch" class="search" placeholder="Buscar nombre o número…">
+            <div id="contactList" class="list"></div>
+          </div>
+          <div class="chat-pane card" id="chatPane">
+            <div class="empty">Selecciona una conversación</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PEDIDOS -->
+      <section id="view-pedidos" class="view">
+        <header class="view-head"><h2>Pedidos</h2>
+          <select id="orderFilter">
+            <option value="">Todos</option>
+            <option value="borrador">Borradores</option>
+            <option value="esperando_pago">Esperando pago</option>
+            <option value="por_aprobar">Por aprobar</option>
+            <option value="aprobado">Aprobados</option>
+            <option value="en_dropi">En Dropi</option>
+            <option value="en_transito,entregado,novedad,devuelto">Despachados</option>
+            <option value="rechazado,cancelado">Rechazados / cancelados</option>
+          </select>
+        </header>
+        <div class="card table-wrap"><table class="table" id="orderTable"></table></div>
+      </section>
+
+      <!-- SIMULADOR -->
+      <section id="view-simulador" class="view">
+        <header class="view-head"><h2>Simulador</h2><span class="muted">Habla con la IA como si fueras un cliente. Nada sale por WhatsApp.</span></header>
+        <div class="sim-layout">
+          <div class="phone">
+            <div class="phone-head">
+              <div><b id="simTitle">Cliente de prueba</b><div class="muted small" id="simStatus">en línea</div></div>
+              <div class="row gap">
+                <button class="btn small" id="simNew" title="Nuevo cliente de prueba">＋ Nuevo</button>
+                <button class="btn small danger" id="simReset" title="Borrar este chat de prueba">Borrar</button>
+              </div>
+            </div>
+            <div class="phone-body" id="simBody"></div>
+            <form class="phone-input" id="simForm">
+              <button type="button" class="btn icon" id="simPhoto" title="Enviar foto (comprobante)">📷</button>
+              <input id="simText" placeholder="Escribe como cliente…" autocomplete="off">
+              <button class="btn primary" type="submit">➤</button>
+            </form>
+          </div>
+          <div class="card sim-side">
+            <h3>Ideas para probar</h3>
+            <div class="chips" id="simIdeas"></div>
+            <h3>Pedido de este chat</h3>
+            <div id="simOrder" class="muted">Aún no hay pedido.</div>
+            <h3>Lo que hizo la IA</h3>
+            <div id="simAudit" class="audit"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PRODUCTO -->
+      <section id="view-producto" class="view">
+        <header class="view-head"><h2>Producto y finanzas</h2></header>
+        <div id="productInfo"></div>
+        <div class="card">
+          <h3>🧭 Consultar zona de envío</h3>
+          <form id="zoneForm" class="row gap wrap">
+            <input name="departamento" placeholder="Departamento" required>
+            <input name="ciudad" placeholder="Ciudad / municipio" required>
+            <input name="barrio" placeholder="Barrio (opcional)">
+            <button class="btn">Consultar</button>
+          </form>
+          <div id="zoneResult"></div>
+        </div>
+      </section>
+
+      <!-- AJUSTES -->
+      <section id="view-ajustes" class="view">
+        <header class="view-head"><h2>Ajustes y conexiones</h2></header>
+        <div id="settings"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modal" class="modal hidden"><div class="modal-box card" id="modalBox"></div></div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+  <script src="/views.js"></script>
+</body>
+</html>
