@@ -145,6 +145,19 @@ func (s *Store) migrate() error {
 			created_at TIMESTAMP NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_phone ON audit(phone, id)`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			rev INTEGER NOT NULL DEFAULT 0,
+			updated_at TIMESTAMP NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS products (
+			sku TEXT PRIMARY KEY,
+			data TEXT NOT NULL,
+			active INTEGER NOT NULL DEFAULT 1,
+			position INTEGER NOT NULL DEFAULT 0,
+			updated_at TIMESTAMP NOT NULL
+		)`,
 	}
 	for _, st := range stmts {
 		if _, err := s.db.Exec(st); err != nil {

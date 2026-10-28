@@ -1,0 +1,228 @@
+package settings
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/michiTrader/dropshipper/motor/internal/config"
+	"github.com/michiTrader/dropshipper/motor/internal/store"
+)
+
+func newCfg() *config.Config {
+	n := config.Negocio{}
+	n.ApplyDefaults()
+	return &config.Config{
+		LLM:      config.LLMConfig{BaseURL: "https://api.deepseek.com", APIKey: "sk-seed-123456", Model: "deepseek-chat"},
+		Negocio:  n,
+		WhatsApp: config.WhatsAppConfig{GraphVersion: "v21.0"},
+	}
+}
+
+func open(t *testing.T) (*Manager, *store.Store) {
+	t.Helper()
+	st, err := store.OpenPath(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	m, err := Open(context.Background(), st, func() Settings { return Seed(newCfg()) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, st
+}
+
+func TestSeedCreatesDeepSeekProvider(t *testing.T) {
+	m, _ := open(t)
+	p, ok := m.Get().Active()
+	if !ok || p.ID != "deepseek" || p.Model != "deepseek-chat" || !p.Ready() {
+		t.Fatalf("%+v ok=%v", p, ok)
+	}
+}
+
+func TestSeedOnlyOnce(t *testing.T) {
+	m, st := open(t)
+	_ = m.Update(context.Background(), func(s *Settings) error { s.IA = IA{}; return nil })
+	m2, err := Open(context.Background(), st, func() Settings { return Seed(newCfg()) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m2.Get().IA.Providers) != 0 {
+		t.Fatal("the seed must not run again once settings exist")
+	}
+}
+
+func TestProviderValidate(t *testing.T) {
+	ok := Provider{Name: "Arxi", Preset: "custom", BaseURL: "https://api.arxi.example/v1/chat/completions", Model: "arxi-1", APIKey: " k "}
+	if err := ok.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if ok.BaseURL != "https://api.arxi.example/v1" || ok.APIKey != "k" || ok.ID != "arxi" {
+		t.Fatalf("%+v", ok)
+	}
+	cases := map[string]Provider{
+		"modelo": {Preset: "custom", BaseURL: "https://x.example/v1", APIKey: "k"},
+		"clave":  {Preset: "custom", BaseURL: "https://x.example/v1", Model: "m"},
+		"URL":    {Preset: "custom", Model: "m", APIKey: "k"},
+	}
+	for want, p := range cases {
+		err := p.Validate()
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("want error mentioning %q, got %v", want, err)
+		}
+	}
+	temp := 3.0
+	bad := Provider{Preset: "deepseek", APIKey: "k", Temperature: &temp}
+	if err := bad.Validate(); err == nil {
+		t.Error("temperature 3 must be rejected")
+	}
+	ol := Provider{Preset: "ollama"}
+	if err := ol.Validate(); err != nil || !ol.Ready() {
+		t.Errorf("ollama needs no key: %v", err)
+	}
+}
+
+func TestPresetFillsDefaults(t *testing.T) {
+	p := Provider{Preset: "openrouter", APIKey: "k"}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.BaseURL, "openrouter.ai") || p.Model == "" || p.Name != "OpenRouter" {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestNewIDIsUnique(t *testing.T) {
+	ia := IA{Providers: []Provider{{ID: "arxi"}, {ID: "arxi-2"}}}
+	if id := ia.NewID("Arxi"); id != "arxi-3" {
+		t.Fatalf("got %s", id)
+	}
+}
+
+func TestValidateRules(t *testing.T) {
+	m, _ := open(t)
+	ctx := context.Background()
+	bad := map[string]func(*Settings){
+		"token":        func(s *Settings) { s.General.AdminToken = "abc" },
+		"dirección":    func(s *Settings) { s.General.PublicURL = "midominio.com" },
+		"activo":       func(s *Settings) { s.IA.ActiveID = "nope" },
+		"devolución":   func(s *Settings) { s.Negocio.Finanzas.TasaDevolucion = 1.5 },
+		"confirmación": func(s *Settings) { s.Negocio.Finanzas.TasaConfirmacion = 1.5 },
+		"TRM":          func(s *Settings) { s.Negocio.Finanzas.TRM = -1 },
+		"pago":         func(s *Settings) { s.Negocio.Pagos.Metodo = "efectivo" },
+	}
+	for want, fn := range bad {
+		err := m.Update(ctx, func(s *Settings) error { fn(s); return nil })
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: got %v", want, err)
+		}
+	}
+	// a rejected update must leave the saved settings untouched
+	if m.Get().General.AdminToken != "" || m.Get().IA.ActiveID != "deepseek" {
+		t.Fatal("rejected update leaked into settings")
+	}
+}
+
+func TestPublicViewNeverLeaksSecrets(t *testing.T) {
+	m, _ := open(t)
+	_ = m.Update(context.Background(), func(s *Settings) error {
+		s.WhatsApp.Token = "EAAB-super-secret-token"
+		s.WhatsApp.PhoneNumberID = "123"
+		s.WhatsApp.AppSecret = "app-secret-value"
+		s.Wompi.PrivateKey = "prv_test_secretkey"
+		s.General.AdminToken = "admin-token-12345"
+		return nil
+	})
+	v := m.Get().Public("http://x")
+	raw := mustJSON(t, v)
+	for _, secret := range []string{"EAAB-super-secret-token", "app-secret-value", "prv_test_secretkey", "admin-token-12345", "sk-seed-123456"} {
+		if strings.Contains(raw, secret) {
+			t.Errorf("secret %q leaked in the public view", secret)
+		}
+	}
+	if !v.WhatsApp.Token.Set || !strings.HasSuffix(v.WhatsApp.Token.Mask, "oken") {
+		t.Errorf("mask: %+v", v.WhatsApp.Token)
+	}
+	if v.WhatsApp.WebhookURL != "http://x/webhook/whatsapp" || v.Wompi.EventsURL != "http://x/webhook/wompi" {
+		t.Errorf("webhooks: %s %s", v.WhatsApp.WebhookURL, v.Wompi.EventsURL)
+	}
+}
+
+func TestMask(t *testing.T) {
+	if Mask("") != "" || Mask("short") != "••••" || Mask("abcdefghijkl") != "••••ijkl" {
+		t.Fatalf("%q %q %q", Mask(""), Mask("short"), Mask("abcdefghijkl"))
+	}
+}
+
+func TestOnChangeAndTwoWriters(t *testing.T) {
+	m, st := open(t)
+	var n atomic.Int32
+	m.OnChange(func(Settings) { n.Add(1) })
+	ctx := context.Background()
+	if err := m.Update(ctx, func(s *Settings) error { s.Negocio.Persona.Nombre = "Ana"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// once on registration (current settings) and once for the update
+	if n.Load() != 2 {
+		t.Fatalf("notified %d times", n.Load())
+	}
+	// a second process (the CLI) edits the same database
+	cli, err := Open(ctx, st, func() Settings { return Seed(newCfg()) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Update(ctx, func(s *Settings) error { s.General.PublicURL = "https://tienda.example"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// the "server" manager then updates something else: must not erase the CLI edit
+	if err := m.Update(ctx, func(s *Settings) error { s.Negocio.Ciudad = "Cali"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	got := m.Get()
+	if got.General.PublicURL != "https://tienda.example" || got.Negocio.Ciudad != "Cali" || got.Negocio.Persona.Nombre != "Ana" {
+		t.Fatalf("lost update: %+v", got.General)
+	}
+}
+
+func TestReloadAndWatchPickUpExternalChanges(t *testing.T) {
+	m, st := open(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if changed, _ := m.Reload(ctx); changed {
+		t.Fatal("nothing changed yet")
+	}
+	var reloaded atomic.Int32
+	go m.Watch(ctx, 20*time.Millisecond, func() { reloaded.Add(1) })
+
+	other, _ := Open(ctx, st, func() Settings { return Seed(newCfg()) })
+	if err := other.Update(ctx, func(s *Settings) error { s.Negocio.Persona.Nombre = "Lucía"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for reloaded.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if reloaded.Load() == 0 || m.Get().Negocio.Persona.Nombre != "Lucía" {
+		t.Fatalf("watch did not reload: %d %q", reloaded.Load(), m.Get().Negocio.Persona.Nombre)
+	}
+}
+
+func TestNewTokenLooksRight(t *testing.T) {
+	a, b := NewToken(), NewToken()
+	if len(a) < MinTokenLen || a == b {
+		t.Fatalf("%q %q", a, b)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

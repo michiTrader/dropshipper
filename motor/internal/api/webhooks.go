@@ -18,7 +18,7 @@ import (
 // waVerify answers Meta's webhook verification handshake.
 func (s *Server) waVerify(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	want := s.Cfg.WhatsApp.VerifyToken
+	want := s.Settings.Get().WhatsApp.VerifyToken
 	if q.Get("hub.mode") == "subscribe" && want != "" &&
 		subtle.ConstantTimeCompare([]byte(q.Get("hub.verify_token")), []byte(want)) == 1 {
 		w.Header().Set("Content-Type", "text/plain")
@@ -36,8 +36,8 @@ func (s *Server) waWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cuerpo inválido", 400)
 		return
 	}
-	if !whatsapp.VerifySignature(s.Cfg.WhatsApp.AppSecret, body, r.Header.Get("X-Hub-Signature-256")) {
-		s.Log.Printf("webhook WhatsApp con firma inválida (revisa WHATSAPP_APP_SECRET)")
+	if !whatsapp.VerifySignature(s.Settings.Get().WhatsApp.AppSecret, body, r.Header.Get("X-Hub-Signature-256")) {
+		s.Log.Printf("webhook WhatsApp con firma inválida (revisa el App Secret en Conexiones > WhatsApp)")
 		http.Error(w, "firma inválida", http.StatusUnauthorized)
 		return
 	}
@@ -60,8 +60,8 @@ func (s *Server) waWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, m := range msgs {
 			in := convo.Inbound{Phone: m.From, Name: m.Name, Kind: m.Type, Text: m.Text, WAID: m.ID, At: m.Timestamp}
-			if m.MediaID != "" && s.WA != nil && (m.Type == "image" || m.Type == "document" || m.Type == "audio") {
-				if name, err := s.WA.DownloadMedia(ctx, m.MediaID, s.MediaDir); err != nil {
+			if wa := s.Hub.WhatsApp(); m.MediaID != "" && wa != nil && (m.Type == "image" || m.Type == "document" || m.Type == "audio") {
+				if name, err := wa.DownloadMedia(ctx, m.MediaID, s.MediaDir); err != nil {
 					s.Log.Printf("descargar media de %s: %v", m.From, err)
 				} else {
 					in.MediaPath = name
@@ -77,7 +77,8 @@ func (s *Server) waWebhook(w http.ResponseWriter, r *http.Request) {
 // wompiWebhook receives Wompi transaction events. Only checksum-verified
 // APPROVED events with the exact advance amount confirm a payment.
 func (s *Server) wompiWebhook(w http.ResponseWriter, r *http.Request) {
-	if s.Wompi == nil {
+	wompi := s.Hub.Wompi()
+	if wompi == nil {
 		w.WriteHeader(200)
 		return
 	}
@@ -86,7 +87,7 @@ func (s *Server) wompiWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cuerpo inválido", 400)
 		return
 	}
-	ev, err := s.Wompi.ParseEvent(body, r.Header.Get("X-Event-Checksum"))
+	ev, err := wompi.ParseEvent(body, r.Header.Get("X-Event-Checksum"))
 	if err != nil {
 		s.Log.Printf("evento Wompi rechazado: %v", err)
 		if errors.Is(err, payments.ErrBadChecksum) {

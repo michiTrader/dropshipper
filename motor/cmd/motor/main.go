@@ -1,9 +1,13 @@
 // Command motor runs the Dropshipper Motor: the always-on server that answers
-// WhatsApp with the AI seller, keeps orders and serves the owner's panel.
+// WhatsApp with the AI seller, keeps orders and serves the owner's panel. The
+// same binary is also the terminal tool to configure it:
 //
-//	cd motor && go run ./cmd/motor
+//	motor                     # starts the server (same as "motor servir")
+//	motor estado              # what is connected and what is missing
+//	motor ia agregar ...      # add an AI provider (see "motor ayuda")
 //
-// Configuration: motor/.env (secrets) and motor/negocio.yaml (business).
+// Everything configurable in the panel is configurable here, and both edit
+// the same data: changes from the terminal reach a running Motor in seconds.
 package main
 
 import (
@@ -24,70 +28,96 @@ import (
 	"github.com/michiTrader/dropshipper/motor/internal/catalog"
 	"github.com/michiTrader/dropshipper/motor/internal/config"
 	"github.com/michiTrader/dropshipper/motor/internal/convo"
-	"github.com/michiTrader/dropshipper/motor/internal/llm"
-	"github.com/michiTrader/dropshipper/motor/internal/payments"
+	"github.com/michiTrader/dropshipper/motor/internal/hub"
 	"github.com/michiTrader/dropshipper/motor/internal/rules"
 	"github.com/michiTrader/dropshipper/motor/internal/sales"
+	"github.com/michiTrader/dropshipper/motor/internal/settings"
 	"github.com/michiTrader/dropshipper/motor/internal/store"
-	"github.com/michiTrader/dropshipper/motor/internal/whatsapp"
 )
 
 func main() {
 	dir := flag.String("dir", ".", "carpeta del Motor (donde están .env, negocio.yaml y knowledge/)")
+	flag.Usage = func() { fmt.Fprint(os.Stderr, helpText) }
 	flag.Parse()
-	lg := log.New(os.Stdout, "motor ", log.LstdFlags)
-	if err := run(*dir, lg); err != nil {
-		lg.Fatalf("error: %v", err)
+	args := flag.Args()
+
+	if len(args) == 0 || args[0] == "servir" {
+		lg := log.New(os.Stdout, "motor ", log.LstdFlags)
+		if err := serve(*dir, lg); err != nil {
+			lg.Fatalf("error: %v", err)
+		}
+		return
+	}
+	if err := runCLI(*dir, args, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
 	}
 }
 
-func run(dir string, lg *log.Logger) error {
+// app is what the server and the terminal share: the database with the
+// settings manager and the catalog on top of it.
+type app struct {
+	cfg *config.Config
+	st  *store.Store
+	set *settings.Manager
+	cat *catalog.Catalog
+}
+
+func (a *app) close() { _ = a.st.Close() }
+
+// openApp loads .env/negocio.yaml (first-run seed only), opens the database
+// and the settings/catalog stored in it.
+func openApp(dir string) (*app, error) {
 	cfg, err := config.Load(dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer st.Close()
-	cat, err := catalog.Load(cfg.KnowledgeDir)
+	ctx := context.Background()
+	set, err := settings.Open(ctx, st, func() settings.Settings { return settings.Seed(cfg) })
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+	cat, err := catalog.Open(ctx, st, cfg.KnowledgeDir)
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+	return &app{cfg: cfg, st: st, set: set, cat: cat}, nil
+}
+
+func serve(dir string, lg *log.Logger) error {
+	a, err := openApp(dir)
 	if err != nil {
 		return err
 	}
+	defer a.close()
+	cfg := a.cfg
+
 	zones, err := rules.LoadZones(filepath.Join(cfg.KnowledgeDir, "zonas.yaml"))
 	if err != nil {
 		return err
 	}
 
-	var wa *whatsapp.Client
-	if cfg.WhatsApp.Enabled() {
-		wa = whatsapp.New(cfg.WhatsApp.Token, cfg.WhatsApp.PhoneNumberID, cfg.WhatsApp.GraphVersion)
-	}
-	var wompi *payments.Wompi
-	if cfg.Wompi.Enabled() {
-		wompi = payments.NewWompi(cfg.Wompi.PrivateKey, cfg.Wompi.EventsSecret, cfg.Wompi.Sandbox)
-	}
+	h := hub.New()
+	live := config.NewLive(a.set.Get().Negocio)
+	a.set.OnChange(func(s settings.Settings) {
+		h.Apply(s)
+		live.Set(s.Negocio)
+	})
 
-	neg := &cfg.Negocio
-	sv := &sales.Service{Store: st, Catalog: cat, Zones: zones, Negocio: neg}
-	if wompi != nil {
-		sv.Payments = wompi
-	}
-	seller := &agent.Seller{
-		LLM: llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey), Model: cfg.LLM.Model, Temperature: cfg.LLM.Temperature,
-		Sales: sv, Store: st, Catalog: cat, Zones: zones, Negocio: neg,
-	}
-	var sender convo.Sender
-	if wa != nil {
-		sender = wa
-	}
-	engine := convo.NewEngine(st, seller, sv, sender, neg, lg)
+	sv := &sales.Service{Store: a.st, Catalog: a.cat, Zones: zones, Negocio: live, Payments: h}
+	seller := &agent.Seller{LLM: h.AI, Sales: sv, Store: a.st, Catalog: a.cat, Zones: zones, Negocio: live}
+	engine := convo.NewEngine(a.st, seller, sv, h, live, lg)
 	sv.Notifier = engine
 	defer engine.Close()
 
 	srv := &api.Server{
-		Cfg: cfg, Store: st, Engine: engine, Sales: sv, Catalog: cat, Zones: zones, WA: wa, Wompi: wompi,
+		Settings: a.set, Hub: h, Store: a.st, Engine: engine, Sales: sv, Catalog: a.cat, Zones: zones,
 		MediaDir: filepath.Join(cfg.DataDir, "media"), Log: lg, Started: time.Now().UTC(),
 	}
 	httpSrv := &http.Server{
@@ -98,6 +128,14 @@ func run(dir string, lg *log.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Changes made from the terminal (another process) reach this one here.
+	go a.set.Watch(ctx, 3*time.Second, func() {
+		if err := a.cat.Reload(ctx); err != nil {
+			lg.Printf("recargar catálogo: %v", err)
+		}
+		lg.Printf("configuración actualizada desde la terminal u otro proceso")
+	})
 	go func() {
 		t := time.NewTicker(15 * time.Minute)
 		defer t.Stop()
@@ -111,7 +149,7 @@ func run(dir string, lg *log.Logger) error {
 		}
 	}()
 
-	printBanner(lg, cfg, cat, wa != nil, wompi != nil)
+	printBanner(lg, a, h, cfg.Port)
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()
 	select {
@@ -120,7 +158,7 @@ func run(dir string, lg *log.Logger) error {
 			return err
 		}
 	case <-ctx.Done():
-		lg.Printf("apagando…")
+		lg.Printf("apagando...")
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(sctx)
@@ -128,25 +166,38 @@ func run(dir string, lg *log.Logger) error {
 	return nil
 }
 
-func printBanner(lg *log.Logger, cfg *config.Config, cat *catalog.Catalog, wa, wompi bool) {
-	ok := func(b bool) string {
+func printBanner(lg *log.Logger, a *app, h *hub.Hub, port int) {
+	mark := func(b bool) string {
 		if b {
-			return "✅"
+			return "[ok]   "
 		}
-		return "⚠️ "
+		return "[falta]"
 	}
-	n := cfg.Negocio
-	p := cat.Default()
-	lg.Printf("Dropshipper Motor · %s · vendedora: %s", n.NombreTienda, n.Persona.Nombre)
-	lg.Printf("%s IA: %s (%s)", ok(cfg.LLM.APIKey != ""), cfg.LLM.Model, cfg.LLM.BaseURL)
-	lg.Printf("%s WhatsApp Cloud API", ok(wa))
-	pagos := n.Pagos.Metodo
-	pagosOK := (pagos == "wompi" && wompi) || (pagos == "manual" && (n.Pagos.Manual.LlaveBreB != "" || n.Pagos.Manual.NumeroCuenta != ""))
-	lg.Printf("%s Pagos anticipados: %s", ok(pagosOK), pagos)
-	lg.Printf("%s Producto: %s (costo confirmado: %v)", ok(p.CostConfirmed), p.Name, p.CostConfirmed)
-	lg.Printf("%s Token del panel", ok(cfg.AdminToken != ""))
-	lg.Printf("Panel: http://localhost:%d", cfg.Port)
-	if cfg.PublicURL != "" {
-		lg.Printf("Webhook WhatsApp: %s/webhook/whatsapp", cfg.PublicURL)
+	s := a.set.Get()
+	n := s.Negocio
+	lg.Printf("Dropshipper Motor %s - %s - vendedora: %s", api.Version, n.NombreTienda, n.Persona.Nombre)
+	if p, ok := s.Active(); ok {
+		lg.Printf("%s IA: %s (%s, %s)", mark(h.AI.Ready()), p.Name, p.Model, p.BaseURL)
+	} else {
+		lg.Printf("%s IA: sin proveedor (panel > Conexiones, o: motor ia agregar)", mark(false))
+	}
+	lg.Printf("%s WhatsApp Cloud API", mark(h.WhatsApp() != nil))
+	pagosOK := (n.Pagos.Metodo == "wompi" && h.Wompi() != nil) ||
+		(n.Pagos.Metodo == "manual" && (n.Pagos.Manual.LlaveBreB != "" || n.Pagos.Manual.NumeroCuenta != ""))
+	lg.Printf("%s Pagos anticipados: %s", mark(pagosOK), n.Pagos.Metodo)
+	act := a.cat.Active()
+	conf := 0
+	for _, p := range act {
+		if p.CostConfirmed {
+			conf++
+		}
+	}
+	lg.Printf("%s Productos activos: %d (con costo confirmado: %d)", mark(len(act) > 0 && conf == len(act)), len(act), conf)
+	if s.General.AdminToken == "" {
+		lg.Printf("[aviso] Sin token: el panel solo abre desde este computador. Para exponerlo: motor token generar")
+	}
+	lg.Printf("Panel: http://localhost:%d", port)
+	if s.General.PublicURL != "" {
+		lg.Printf("Webhook WhatsApp: %s/webhook/whatsapp", s.General.PublicURL)
 	}
 }

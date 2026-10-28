@@ -77,10 +77,11 @@ func newRig(t *testing.T, neg config.Negocio) *rig {
 	}
 	t.Cleanup(func() { st.Close() })
 	fake := &scriptedLLM{}
-	sv := &sales.Service{Store: st, Catalog: cat, Zones: zones, Negocio: &neg}
-	seller := &agent.Seller{LLM: fake, Model: "test", Sales: sv, Store: st, Catalog: cat, Zones: zones, Negocio: &neg}
-	eng := NewEngine(st, seller, sv, nil, &neg, log.New(io.Discard, "", 0))
-	eng.Debounce, eng.BubblePause = 30*time.Millisecond, 0
+	live := config.NewLive(neg)
+	sv := &sales.Service{Store: st, Catalog: cat, Zones: zones, Negocio: live}
+	seller := &agent.Seller{LLM: fake, Model: "test", Sales: sv, Store: st, Catalog: cat, Zones: zones, Negocio: live}
+	eng := NewEngine(st, seller, sv, nil, live, log.New(io.Discard, "", 0))
+	eng.Debounce, eng.BubblePause = 30*time.Millisecond, -1
 	sv.Notifier = eng
 	t.Cleanup(eng.Close)
 	return &rig{st: st, sv: sv, eng: eng, llm: fake}

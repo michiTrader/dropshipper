@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,28 +21,30 @@ import (
 	"time"
 
 	"github.com/michiTrader/dropshipper/motor/internal/catalog"
-	"github.com/michiTrader/dropshipper/motor/internal/config"
 	"github.com/michiTrader/dropshipper/motor/internal/convo"
-	"github.com/michiTrader/dropshipper/motor/internal/payments"
+	"github.com/michiTrader/dropshipper/motor/internal/hub"
 	"github.com/michiTrader/dropshipper/motor/internal/rules"
 	"github.com/michiTrader/dropshipper/motor/internal/sales"
+	"github.com/michiTrader/dropshipper/motor/internal/settings"
 	"github.com/michiTrader/dropshipper/motor/internal/store"
 	"github.com/michiTrader/dropshipper/motor/internal/whatsapp"
 )
+
+// Version is the Motor version shown in the panel.
+const Version = "0.2.0"
 
 //go:embed web
 var webFS embed.FS
 
 // Server holds everything the handlers need.
 type Server struct {
-	Cfg      *config.Config
+	Settings *settings.Manager
+	Hub      *hub.Hub
 	Store    *store.Store
 	Engine   *convo.Engine
 	Sales    *sales.Service
 	Catalog  *catalog.Catalog
 	Zones    *rules.ZoneRules
-	WA       *whatsapp.Client // nil when WhatsApp is not configured
-	Wompi    *payments.Wompi  // nil when Wompi is not configured
 	MediaDir string
 	Log      *log.Logger
 	Started  time.Time
@@ -62,7 +65,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/estado", s.status)
 	api.HandleFunc("GET /api/stats", s.stats)
 	api.HandleFunc("GET /api/eventos", s.events)
-	api.HandleFunc("GET /api/producto", s.product)
+	s.settingsRoutes(api)
+	s.productRoutes(api)
 	api.HandleFunc("GET /api/contactos", s.contacts)
 	api.HandleFunc("GET /api/contactos/{phone}", s.contact)
 	api.HandleFunc("GET /api/contactos/{phone}/mensajes", s.messages)
@@ -97,11 +101,43 @@ func (s *Server) Handler() http.Handler {
 
 // ---------- auth & helpers ----------
 
+// proxyHeaders reveal that a request went through a reverse proxy or tunnel,
+// so a "local" connection may in fact come from the internet.
+var proxyHeaders = []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Real-Ip", "Forwarded", "Cf-Connecting-Ip", "True-Client-Ip", "X-Forwarded-Proto"}
+
+// isLocal is true only for direct loopback connections without proxy headers.
+func isLocal(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return false
+	}
+	for _, h := range proxyHeaders {
+		if r.Header.Get(h) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// auth protects the panel API. With a token: Bearer header or ?token=.
+// Without a token the panel only works from this very computer, so a Motor
+// exposed to the internet by mistake never serves its data to strangers.
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		want := s.Cfg.AdminToken
+		want := s.Settings.AdminToken()
 		if want == "" {
-			next.ServeHTTP(w, r)
+			if isLocal(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":          "el panel solo está disponible desde este computador hasta que definas un token de acceso (terminal: motor token generar)",
+				"requiere_token": true, "sin_token": true,
+			})
 			return
 		}
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -169,39 +205,6 @@ func logRequests(lg *log.Logger, h http.Handler) http.Handler {
 
 // ---------- status ----------
 
-func (s *Server) status(w http.ResponseWriter, r *http.Request) {
-	p := s.Catalog.Default()
-	n := s.Cfg.Negocio
-	pagoListo := n.Pagos.Metodo == "wompi" && s.Wompi != nil ||
-		n.Pagos.Metodo == "manual" && (n.Pagos.Manual.LlaveBreB != "" || n.Pagos.Manual.NumeroCuenta != "")
-	webhook := ""
-	if s.Cfg.PublicURL != "" {
-		webhook = s.Cfg.PublicURL + "/webhook/whatsapp"
-	}
-	writeJSON(w, 200, map[string]any{
-		"tienda":  n.NombreTienda,
-		"persona": n.Persona,
-		"ia": map[string]any{
-			"configurada": s.Cfg.LLM.APIKey != "", "modelo": s.Cfg.LLM.Model, "endpoint": s.Cfg.LLM.BaseURL,
-		},
-		"whatsapp": map[string]any{
-			"configurado": s.Cfg.WhatsApp.Enabled(), "verify_token": s.Cfg.WhatsApp.VerifyToken != "",
-			"firma_verificada": s.Cfg.WhatsApp.AppSecret != "", "webhook_url": webhook,
-		},
-		"pagos": map[string]any{
-			"metodo": n.Pagos.Metodo, "listo": pagoListo, "wompi": s.Wompi != nil,
-			"llave_bre_b": n.Pagos.Manual.LlaveBreB != "", "cuenta": n.Pagos.Manual.NumeroCuenta != "",
-		},
-		"dropi":          map[string]any{"modo": n.Dropi.Modo},
-		"producto":       map[string]any{"nombre": p.Name, "costo_confirmado": p.CostConfirmed},
-		"autonomia":      n.Autonomia,
-		"aviso_dueno":    n.Notificar.WhatsAppDueno != "",
-		"requiere_token": s.Cfg.AdminToken != "",
-		"iniciado":       s.Started,
-		"version":        "0.1.0",
-	})
-}
-
 func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	st, err := s.Store.Stats(r.Context())
 	if err != nil {
@@ -244,32 +247,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
-}
-
-// product returns the product sheet with the economics of every offer.
-func (s *Server) product(w http.ResponseWriter, r *http.Request) {
-	p := s.Catalog.Default()
-	f := s.Cfg.Negocio.Finanzas
-	type offerEco struct {
-		catalog.Offer
-		COD        rules.ProfitResult `json:"contraentrega"`
-		Partial    rules.ProfitResult `json:"anticipo_parcial"`
-		TargetCPA  int64              `json:"cpa_objetivo"`
-		TargetLead int64              `json:"costo_por_chat_objetivo"`
-		PriceUSD   float64            `json:"precio_usd"`
-		PerNight   int64              `json:"precio_por_noche"`
-	}
-	var offers []offerEco
-	for _, o := range p.Offers {
-		cod := rules.Profit(rules.ProfitInput{Price: o.Price, UnitCost: p.UnitCost, Units: o.Units, Freight: p.Freight, ReturnRate: f.TasaDevolucion})
-		adv, _ := rules.Advance(s.Zones.PolicyFor(rules.RiskFar), o.Price)
-		partial := rules.Profit(rules.ProfitInput{Price: o.Price, UnitCost: p.UnitCost, Units: o.Units, Freight: p.Freight,
-			ReturnRate: rules.ReturnRateFor(f.TasaDevolucion, rules.RiskFar, rules.PayPartial), AdvancePaid: adv})
-		perOrder, perLead := rules.MaxCPA(cod.BreakEvenCPA, f.MargenSeguridad, f.TasaConfirmacion)
-		offers = append(offers, offerEco{Offer: o, COD: cod, Partial: partial, TargetCPA: perOrder, TargetLead: perLead,
-			PriceUSD: rules.COPtoUSD(o.Price, f.TRM), PerNight: o.Price / int64(o.Units*30)})
-	}
-	writeJSON(w, 200, map[string]any{"producto": p, "ofertas": offers, "finanzas": f})
 }
 
 // ---------- contacts & messages ----------
@@ -567,13 +544,24 @@ func (s *Server) zoneQuery(w http.ResponseWriter, r *http.Request) {
 		Ciudad       string `json:"ciudad"`
 		Barrio       string `json:"barrio"`
 		Total        int64  `json:"total"`
+		SKU          string `json:"producto_sku"`
 	}
 	if err := readJSON(r, &in); err != nil {
 		writeErr(w, err)
 		return
 	}
 	if in.Total <= 0 {
-		in.Total = s.Catalog.Default().Offers[0].Price
+		p := s.Catalog.Default()
+		if sku := strings.TrimSpace(in.SKU); sku != "" {
+			if q, ok := s.Catalog.Get(sku); ok {
+				p = q
+			}
+		}
+		if len(p.Offers) == 0 {
+			writeErr(w, errors.New("no hay productos con ofertas para calcular el valor"))
+			return
+		}
+		in.Total = p.Offers[0].Price
 	}
 	writeJSON(w, 200, s.Zones.Decide(rules.Destination{Department: in.Departamento, City: in.Ciudad, Neighborhood: in.Barrio}, in.Total))
 }

@@ -84,6 +84,51 @@ func (w *Wompi) CreateLink(ctx context.Context, reference, description string, a
 	return out.Data.ID, "https://checkout.wompi.co/l/" + out.Data.ID, nil
 }
 
+// ErrNotConfigured means Wompi keys are missing.
+var ErrNotConfigured = errors.New("Wompi no está configurado: falta la llave privada")
+
+// MerchantInfo is what Wompi says about the account behind the public key.
+type MerchantInfo struct {
+	Name    string `json:"nombre"`
+	Email   string `json:"correo"`
+	Sandbox bool   `json:"pruebas"`
+}
+
+// CheckMerchant validates a public key against GET /merchants/{pub}.
+func (w *Wompi) CheckMerchant(ctx context.Context, publicKey string) (MerchantInfo, error) {
+	if publicKey == "" {
+		return MerchantInfo{}, errors.New("falta la llave pública de Wompi (pub_test_… o pub_prod_…)")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(w.BaseURL, "/")+"/merchants/"+publicKey, nil)
+	if err != nil {
+		return MerchantInfo{}, err
+	}
+	resp, err := w.HTTP.Do(req)
+	if err != nil {
+		return MerchantInfo{}, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 {
+		return MerchantInfo{}, fmt.Errorf("Wompi HTTP %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	var out struct {
+		Data struct {
+			Name         string `json:"name"`
+			LegalName    string `json:"legal_name"`
+			ContactEmail string `json:"contact_email"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return MerchantInfo{}, fmt.Errorf("respuesta de Wompi inválida: %w", err)
+	}
+	name := out.Data.Name
+	if name == "" {
+		name = out.Data.LegalName
+	}
+	return MerchantInfo{Name: name, Email: out.Data.ContactEmail, Sandbox: w.Sandbox}, nil
+}
+
 // Event is a parsed, verified Wompi event.
 type Event struct {
 	Type          string
