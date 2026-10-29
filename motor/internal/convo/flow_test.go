@@ -3,6 +3,7 @@ package convo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"path/filepath"
@@ -368,5 +369,44 @@ func TestChangeAfterConfirmReturnsToDraft(t *testing.T) {
 	o, _ := r.st.GetOrder(ctx, res.OrderID)
 	if o.Status != store.OrderDraft || o.ConfirmedAt != nil {
 		t.Fatalf("expected back to draft: %+v", o)
+	}
+}
+
+type failingLLM struct{ err error }
+
+func (f failingLLM) Complete(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{}, f.err
+}
+
+// A failing AI must raise an alert AND tell the panel to stop showing
+// "escribiendo..." (regression: the panel stayed typing forever).
+func TestAIErrorPublishesListoAndAlert(t *testing.T) {
+	r := newRig(t, manualNegocio())
+	r.eng.Agent.(*agent.Seller).LLM = failingLLM{err: errors.New(`IA HTTP 404: {"message":"Route POST:/chat/completions not found"}`)}
+	ch, stop := r.eng.Events.Subscribe()
+	defer stop()
+
+	phone := "573001112233"
+	if err := r.eng.HandleInbound(context.Background(), Inbound{Phone: phone, Kind: "text", Text: "hola", Simulated: true}); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	deadline := time.After(3 * time.Second)
+	for done := false; !done; {
+		select {
+		case ev := <-ch:
+			if ev.Phone == phone {
+				seen = append(seen, ev.Type)
+			}
+			if ev.Type == "listo" {
+				done = true
+			}
+		case <-deadline:
+			t.Fatalf("never got 'listo'; events=%v", seen)
+		}
+	}
+	alerts, _ := r.st.OpenAlerts(context.Background())
+	if len(alerts) == 0 || !strings.Contains(alerts[0].Message, "/v1") {
+		t.Fatalf("expected a friendly alert mentioning /v1, got %+v", alerts)
 	}
 }

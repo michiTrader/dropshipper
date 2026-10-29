@@ -154,3 +154,99 @@ func TestFriendlyMessages(t *testing.T) {
 		t.Error("nil must give empty")
 	}
 }
+
+// v1Only mimics gateways (like apinex) that serve the API only under /v1 and
+// answer 404 "Route ... not found" anywhere else.
+func v1Only(t *testing.T, hits *[]string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*hits = append(*hits, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Hola"}}],"usage":{"total_tokens":3}}`))
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"free/deepseek-v4.1-flash"}]}`))
+		default:
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"message":"Route ` + r.Method + `:` + r.URL.Path + ` not found","error":"Not Found","statusCode":404}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestCompleteFallsBackToV1AndRemembers(t *testing.T) {
+	var hits []string
+	srv := v1Only(t, &hits)
+	c := NewClient(srv.URL+"/", "k")
+	c.MaxRetries = 0
+	for i := 0; i < 2; i++ {
+		r, err := c.Complete(context.Background(), Request{Model: "m"})
+		if err != nil || r.Message.Content != "Hola" {
+			t.Fatalf("call %d: %v %+v", i, err, r)
+		}
+	}
+	if got := strings.Join(hits, ","); got != "POST /chat/completions,POST /v1/chat/completions,POST /v1/chat/completions" {
+		t.Fatalf("the working URL must be remembered, hits=%s", got)
+	}
+	if c.EffectiveBaseURL() != srv.URL+"/v1" {
+		t.Fatalf("effective=%q", c.EffectiveBaseURL())
+	}
+}
+
+func TestListModelsAndCheckFallBackToV1(t *testing.T) {
+	var hits []string
+	srv := v1Only(t, &hits)
+	c := NewClient(srv.URL, "k")
+	c.MaxRetries = 0
+	got, err := c.ListModels(context.Background())
+	if err != nil || len(got) != 1 || got[0] != "free/deepseek-v4.1-flash" {
+		t.Fatalf("%v %v", got, err)
+	}
+	c2 := NewClient(srv.URL, "k")
+	res, err := c2.Check(context.Background(), "m")
+	if err != nil || res.BaseURL != srv.URL+"/v1" || res.Reply != "Hola" {
+		t.Fatalf("%+v %v", res, err)
+	}
+}
+
+func TestNoV1FallbackWhenVersionAlreadyPresentOrNot404(t *testing.T) {
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL+"/v2", "k")
+	c.MaxRetries = 0
+	_, err := c.Complete(context.Background(), Request{Model: "m"})
+	if err == nil || len(hits) != 1 {
+		t.Fatalf("err=%v hits=%v (must not append /v1 after /v2)", err, hits)
+	}
+	// 401 on the bare URL is a real answer: no second attempt.
+	hits = nil
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		w.WriteHeader(401)
+	}))
+	defer srv2.Close()
+	c2 := NewClient(srv2.URL, "k")
+	c2.MaxRetries = 0
+	if _, err := c2.Complete(context.Background(), Request{Model: "m"}); err == nil || len(hits) != 1 {
+		t.Fatalf("err=%v hits=%v", err, hits)
+	}
+}
+
+func TestFriendlyRouteNotFoundMentionsV1(t *testing.T) {
+	got := Friendly(errors.New(`IA HTTP 404: {"message":"Route POST:/chat/completions not found"}`))
+	if !strings.Contains(got, "/v1") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestFriendly402IncludesProviderMessage(t *testing.T) {
+	got := Friendly(errors.New(`IA HTTP 402: {"error":{"message":"Daily check-in required to use free models.","type":"billing_error"}}`))
+	if !strings.Contains(got, "saldo") || !strings.Contains(got, "Daily check-in required") {
+		t.Fatalf("%q", got)
+	}
+}

@@ -326,13 +326,15 @@ func (c *cli) ia(args []string) error {
 		}
 		ctx, cancel := context.WithTimeout(c.ctx, 25*time.Second)
 		defer cancel()
-		models, err := clientFor(p).ListModels(ctx)
+		cl := clientFor(p)
+		models, err := cl.ListModels(ctx)
 		if err != nil {
 			return errors.New(llm.Friendly(err))
 		}
 		for _, m := range models {
 			c.p("%s", m)
 		}
+		c.urlHint(p, cl.EffectiveBaseURL())
 		return nil
 	case "probar":
 		id := ""
@@ -350,9 +352,21 @@ func (c *cli) ia(args []string) error {
 			return errors.New(llm.Friendly(err))
 		}
 		c.p("Conexion correcta con %s (%s): respondio %q en %d ms.", p.Name, p.Model, res.Reply, res.LatencyMs)
+		c.urlHint(p, res.BaseURL)
 		return nil
 	}
 	return fmt.Errorf("no conozco 'ia %s'; usa 'motor ayuda'", sub)
+}
+
+// urlHint tells the user when the provider only answers under another
+// address (usually the same one plus /v1) and how to store it. The motor
+// already works either way; this just makes the saved address exact.
+func (c *cli) urlHint(p settings.Provider, worked string) {
+	typed := llm.NormalizeBaseURL(p.BaseURL)
+	if worked == "" || worked == typed {
+		return
+	}
+	c.p("Aviso: ese proveedor responde en %s (se anadio /v1). Para dejarlo fijo: motor ia editar %s --url %s", worked, p.ID, worked)
 }
 
 func (c *cli) iaSave(create bool, args []string) error {
