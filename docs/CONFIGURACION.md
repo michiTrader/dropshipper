@@ -67,11 +67,15 @@ Puedes tener varios proveedores guardados y cambiar el que esta en uso con un cl
 ```bash
 motor ia presets                                             # proveedores conocidos
 echo $MI_CLAVE | motor ia agregar --preset deepseek --clave - --activar
-motor ia agregar --nombre Arxi --url https://tu-arxi/v1 --modelo mi-modelo --clave - --activar
+motor ia agregar --nombre Arxi --url https://tu-arxi/v1 --modelo mi-modelo --clave - --activar   # la URL suele terminar en /v1
 motor ia modelos                                             # modelos disponibles
 motor ia probar                                              # llamada real de prueba
 motor ia listar | activar ID | quitar ID
 ```
+
+**Sobre la URL:** debe ser la direccion base de una API compatible con OpenAI, normalmente terminada en `/v1` (por ejemplo `https://api.ejemplo.com/v1`). Si pegas solo el dominio (`https://api.ejemplo.com`) y el proveedor responde "Route ... not found" (404), el Motor reintenta solo con `/v1`, recuerda la que funciona y, al probar la conexion, te sugiere guardar la direccion corregida. No incluyas `/chat/completions`.
+
+Si la IA falla al responder, el Motor crea una alerta con la causa en espanol (clave rechazada, sin saldo, URL incorrecta, modelo inexistente...) y deja el chat para que respondas tu.
 
 El guion en `--clave -` lee la clave de la entrada estandar, para que no quede en el historial de la terminal.
 La clave nunca se vuelve a mostrar completa: el panel solo muestra los ultimos 4 caracteres, y al editar un

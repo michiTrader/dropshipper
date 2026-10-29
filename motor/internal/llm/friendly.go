@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"regexp"
 	"strings"
 )
 
@@ -26,11 +27,15 @@ func Friendly(err error) string {
 	case strings.Contains(low, "http 401") || strings.Contains(low, "http 403") || strings.Contains(low, "invalid api key") || strings.Contains(low, "unauthorized"):
 		return "El proveedor rechazó la clave. Revisa que esté completa, sin espacios y que siga activa."
 	case strings.Contains(low, "http 402") || strings.Contains(low, "insufficient") || strings.Contains(low, "balance") || strings.Contains(low, "quota"):
-		return "La cuenta del proveedor no tiene saldo o cupo. Recarga saldo en su panel e inténtalo de nuevo."
+		out := "La cuenta del proveedor no tiene saldo o cupo. Recarga saldo en su panel e inténtalo de nuevo."
+		if m := providerMessage(msg); m != "" {
+			out += " El proveedor dice: " + m
+		}
+		return out
 	case strings.Contains(low, "http 404") && strings.Contains(low, "model"):
 		return "El proveedor no reconoce ese modelo. Usa 'Cargar modelos' para elegir uno de la lista."
 	case strings.Contains(low, "http 404"):
-		return "La dirección no responde como un proveedor compatible con OpenAI. Revisa la URL (normalmente termina en /v1)."
+		return "La dirección no responde como un proveedor compatible con OpenAI (ruta no encontrada). Revisa la URL base: normalmente termina en /v1, por ejemplo https://api.ejemplo.com/v1."
 	case strings.Contains(low, "http 400") && strings.Contains(low, "model"):
 		return "El proveedor no acepta ese modelo. Usa 'Cargar modelos' para elegir uno válido."
 	case strings.Contains(low, "http 429"):
@@ -43,4 +48,15 @@ func Friendly(err error) string {
 		return "La dirección respondió, pero no con el formato esperado. Verifica que sea la URL base de una API compatible con OpenAI."
 	}
 	return msg
+}
+
+var providerMsgRe = regexp.MustCompile(`"message"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+
+// providerMessage pulls the human message out of a JSON error body, if any.
+func providerMessage(raw string) string {
+	m := providerMsgRe.FindStringSubmatch(raw)
+	if len(m) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(strings.ReplaceAll(m[1], `\"`, `"`))
 }

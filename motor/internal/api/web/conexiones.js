@@ -125,13 +125,18 @@ function openProvider(p) {
   $('#loadModels').onclick = (e) => busy(e.currentTarget, async () => {
     const r = await post('/api/ia/modelos', body());
     if (!r.ok) { $('#modelsHint').innerHTML = `<span style="color:var(--bad)">${esc(r.error)}</span>`; return; }
+    if (r.url_sugerida) f.base_url.value = r.url_sugerida;
     $('#modelList').innerHTML = r.modelos.map((m) => `<option value="${esc(m)}">`).join('');
     $('#modelsHint').textContent = `${r.modelos.length} modelos disponibles. Haz clic en el campo para elegir.`;
     if (!f.modelo.value && r.modelos[0]) f.modelo.value = r.modelos[0];
   });
   $('#provTestBtn').onclick = (e) => busy(e.currentTarget, async () => {
     $('#provTest').innerHTML = '';
-    showTest($('#provTest'), await post('/api/ia/probar', body()));
+    const r = await post('/api/ia/probar', body());
+    // The server found the address only works under /v1: fix the field so
+    // saving keeps the right one.
+    if (r.ok && r.url_sugerida) f.base_url.value = r.url_sugerida;
+    showTest($('#provTest'), r);
   });
   f.onsubmit = async (e) => {
     e.preventDefault();

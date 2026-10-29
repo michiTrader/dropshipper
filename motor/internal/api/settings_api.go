@@ -476,7 +476,22 @@ func (s *Server) testProvider(w http.ResponseWriter, r *http.Request) {
 		testFail(w, llm.Friendly(err))
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "mensaje": "Conexión correcta: el modelo respondió en " + msFmt(res.LatencyMs), "resultado": res})
+	out := map[string]any{"ok": true, "mensaje": "Conexión correcta: el modelo respondió en " + msFmt(res.LatencyMs), "resultado": res}
+	if sug := suggestedURL(p.BaseURL, res.BaseURL); sug != "" {
+		out["url_sugerida"] = sug
+		out["mensaje"] = "Conexión correcta usando " + sug + " (se añadió /v1 a la dirección). Guarda así para que quede fija."
+	}
+	writeJSON(w, 200, out)
+}
+
+// suggestedURL returns the base URL that really worked when it differs from
+// the one typed (typically the same address plus "/v1"), or "".
+func suggestedURL(typed, worked string) string {
+	typed = llm.NormalizeBaseURL(typed)
+	if worked == "" || worked == typed {
+		return ""
+	}
+	return worked
 }
 
 func msFmt(ms int64) string {
@@ -515,7 +530,8 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), hub.TestTimeout)
 	defer cancel()
-	models, err := clientFor(p).ListModels(ctx)
+	cl := clientFor(p)
+	models, err := cl.ListModels(ctx)
 	if err != nil {
 		testFail(w, llm.Friendly(err))
 		return
@@ -523,7 +539,11 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	if models == nil {
 		models = []string{}
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "modelos": models})
+	out := map[string]any{"ok": true, "modelos": models}
+	if sug := suggestedURL(p.BaseURL, cl.EffectiveBaseURL()); sug != "" {
+		out["url_sugerida"] = sug
+	}
+	writeJSON(w, 200, out)
 }
 
 // ---------- status ----------

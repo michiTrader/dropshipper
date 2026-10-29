@@ -33,7 +33,7 @@ Desde la terminal (`go build -o motor ./cmd/motor` y luego `./motor ...`):
 motor estado                                   # que esta conectado y que falta
 echo $CLAVE | motor ia agregar --preset deepseek --clave - --activar
 motor ia probar                                # llamada real de prueba
-motor ia agregar --nombre Arxi --url https://tu-arxi/v1 --modelo mi-modelo --clave - --activar
+motor ia agregar --nombre Arxi --url https://tu-arxi/v1 --modelo mi-modelo --clave - --activar   # la URL suele terminar en /v1
 echo $TOKEN | motor whatsapp configurar --token - --telefono-id 123456789 --verify-token mi-texto
 motor token generar                            # acceso al panel desde otros equipos
 motor negocio poner finanzas.tasa_devolucion 25%

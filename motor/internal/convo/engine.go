@@ -230,14 +230,17 @@ func (e *Engine) Reply(ctx context.Context, phone string) {
 		}
 	}
 	e.Events.Publish(Event{Type: "escribiendo", Phone: phone})
+	// Whatever happens below (answer, error, panic), the panel must stop
+	// showing "escribiendo...".
+	defer e.Events.Publish(Event{Type: "listo", Phone: phone})
 
 	reply, err := e.Agent.Respond(ctx, phone)
 	if err != nil {
 		e.Log.Printf("agente %s: %v", phone, err)
 		e.Store.Audit(ctx, phone, "sistema", "error_ia", err.Error())
-		msg := "La IA no pudo responder: " + err.Error()
+		msg := "La IA no pudo responder: " + llm.Friendly(err) + " Responde tú este chat mientras tanto."
 		if errors.Is(err, llm.ErrNoAPIKey) {
-			msg = "La IA no está configurada (falta la API key de DeepSeek). Responde tú este chat."
+			msg = "La IA no está configurada (falta el proveedor o su API key en Conexiones). Responde tú este chat."
 		}
 		_, _ = e.Store.AddAlert(ctx, store.Alert{Phone: phone, Kind: store.AlertError, Message: msg})
 		e.Events.Publish(Event{Type: "alerta", Phone: phone})
@@ -260,7 +263,6 @@ func (e *Engine) Reply(ctx context.Context, phone string) {
 	if reply.Escalated {
 		e.Events.Publish(Event{Type: "alerta", Phone: phone})
 	}
-	e.Events.Publish(Event{Type: "listo", Phone: phone})
 }
 
 // pause waits a human-like time before a bubble (longer text, longer pause).

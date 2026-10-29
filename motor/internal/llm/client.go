@@ -13,9 +13,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -89,6 +91,16 @@ type Client struct {
 	MaxRetries int
 	// AllowNoKey lets keyless endpoints (a local Ollama) work.
 	AllowNoKey bool
+
+	// found remembers which base URL really answered (see candidates). It is
+	// shared by copies of the client; nil (struct literal) just disables the
+	// cache.
+	found *foundBase
+}
+
+type foundBase struct {
+	mu  sync.RWMutex
+	url string
 }
 
 // NewClient builds a client with sane timeouts.
@@ -98,7 +110,66 @@ func NewClient(baseURL, apiKey string) *Client {
 		APIKey:     apiKey,
 		HTTP:       &http.Client{Timeout: 120 * time.Second},
 		MaxRetries: 3,
+		found:      &foundBase{},
 	}
+}
+
+var versionSeg = regexp.MustCompile(`/v\d+[a-z]*(/|$)`)
+
+// candidates lists the base URLs to try, in order. Many gateways only serve
+// under "/v1" but people paste the bare host (https://api.example.com); when
+// the bare URL answers 404 we retry with "/v1" and remember what worked.
+func (c *Client) candidates() []string {
+	base := strings.TrimRight(c.BaseURL, "/")
+	if c.found != nil {
+		c.found.mu.RLock()
+		u := c.found.url
+		c.found.mu.RUnlock()
+		if u != "" {
+			return []string{u}
+		}
+	}
+	out := []string{base}
+	if !versionSeg.MatchString(base) {
+		out = append(out, base+"/v1")
+	}
+	return out
+}
+
+func (c *Client) remember(base string) {
+	if c.found != nil {
+		c.found.mu.Lock()
+		c.found.url = base
+		c.found.mu.Unlock()
+	}
+}
+
+// EffectiveBaseURL is the base URL that actually worked on the last
+// successful request (it differs from BaseURL when "/v1" had to be added),
+// or BaseURL itself when nothing has succeeded yet.
+func (c *Client) EffectiveBaseURL() string {
+	if c.found != nil {
+		c.found.mu.RLock()
+		u := c.found.url
+		c.found.mu.RUnlock()
+		if u != "" {
+			return u
+		}
+	}
+	return strings.TrimRight(c.BaseURL, "/")
+}
+
+// HTTPError is a non-200 answer from the provider.
+type HTTPError struct {
+	Status int
+	Body   string
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("IA HTTP %d: %s", e.Status, e.Body) }
+
+func isNotFound(err error) bool {
+	var he *HTTPError
+	return errors.As(err, &he) && he.Status == http.StatusNotFound
 }
 
 // ErrNoAPIKey means the LLM is not configured.
@@ -139,6 +210,7 @@ func ValidateBaseURL(u string) error {
 }
 
 // Complete sends one chat completion request, retrying 429/5xx with backoff.
+// A 404 on the bare base URL is retried once under "/v1".
 func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 	if c.APIKey == "" && !c.AllowNoKey {
 		return Response{}, ErrNoAPIKey
@@ -147,7 +219,28 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
-	endpoint := c.BaseURL + "/chat/completions"
+	var (
+		resp  Response
+		first error
+	)
+	for _, base := range c.candidates() {
+		resp, err = c.complete(ctx, base, body)
+		if err == nil {
+			c.remember(base)
+			return resp, nil
+		}
+		if first == nil {
+			first = err
+		}
+		if !isNotFound(err) {
+			return Response{}, err
+		}
+	}
+	return Response{}, first
+}
+
+func (c *Client) complete(ctx context.Context, base string, body []byte) (Response, error) {
+	endpoint := base + "/chat/completions"
 	var lastErr error
 	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -174,7 +267,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
-			return Response{}, fmt.Errorf("IA HTTP %d: %s", resp.StatusCode, snippet(raw))
+			return Response{}, &HTTPError{Status: resp.StatusCode, Body: snippet(raw)}
 		}
 		var parsed struct {
 			Choices []struct {
@@ -271,7 +364,25 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	if c.APIKey == "" && !c.AllowNoKey {
 		return nil, ErrNoAPIKey
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/models", nil)
+	var first error
+	for _, base := range c.candidates() {
+		out, err := c.listModels(ctx, base)
+		if err == nil {
+			c.remember(base)
+			return out, nil
+		}
+		if first == nil {
+			first = err
+		}
+		if !isNotFound(err) {
+			return nil, err
+		}
+	}
+	return nil, first
+}
+
+func (c *Client) listModels(ctx context.Context, base string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +394,7 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("IA HTTP %d: %s", resp.StatusCode, snippet(raw))
+		return nil, &HTTPError{Status: resp.StatusCode, Body: snippet(raw)}
 	}
 	var parsed struct {
 		Data []struct {
@@ -322,11 +433,13 @@ type CheckResult struct {
 	Reply     string `json:"respuesta"`
 	LatencyMs int64  `json:"latencia_ms"`
 	Tokens    int    `json:"tokens"`
+	// BaseURL is the address that really answered (may include "/v1").
+	BaseURL string `json:"url_efectiva,omitempty"`
 }
 
 // Check sends a tiny real request (no retries) to prove URL, key and model work.
 func (c *Client) Check(ctx context.Context, model string) (CheckResult, error) {
-	cc := *c
+	cc := *c // shares the found-base cache on purpose
 	cc.MaxRetries = 0
 	start := time.Now()
 	resp, err := cc.Complete(ctx, Request{
@@ -342,5 +455,6 @@ func (c *Client) Check(ctx context.Context, model string) (CheckResult, error) {
 		Reply:     strings.TrimSpace(resp.Message.Content),
 		LatencyMs: time.Since(start).Milliseconds(),
 		Tokens:    resp.Usage.TotalTokens,
+		BaseURL:   cc.EffectiveBaseURL(),
 	}, nil
 }
