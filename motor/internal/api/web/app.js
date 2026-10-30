@@ -64,6 +64,9 @@ const ICONS = {
   list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
   cpu: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
   database: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
 };
 const ic = (name, size) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"${size ? ` style="width:${size}px;height:${size}px"` : ''}>${ICONS[name] || ICONS.info}</svg>`;
@@ -143,9 +146,6 @@ const contactName = (c) => c.name || contactLabel(c.phone);
 
 // Bloques de interfaz reutilizables.
 const notice = (kind, html) => `<div class="notice ${kind}">${ic({ ok: 'check-circle', warn: 'alert', bad: 'alert', info: 'info' }[kind] || 'info')}<div>${html}</div></div>`;
-const termBlock = (title, cmds, open) => `<details class="term"${open ? ' open' : ''}><summary>${ic('terminal')} ${esc(title || 'Hacerlo desde la terminal')}</summary>
-  <p class="small muted" style="margin:8px 0 0">Hace exactamente lo mismo que este formulario y comparte los mismos datos.</p>
-  <pre class="term">${esc(cmds)}</pre></details>`;
 const fld = (name, label, value, o = {}) => `<label class="field${o.full ? ' full' : ''}"><span>${label}</span>
   <input name="${name}" type="${o.type || 'text'}" value="${esc(value ?? '')}"${o.ph ? ` placeholder="${esc(o.ph)}"` : ''}${o.ro ? ' readonly' : ''}${o.auto ? ` autocomplete="${o.auto}"` : ''}>${o.help ? `<small>${o.help}</small>` : ''}</label>`;
 const formData = (form) => Object.fromEntries(new FormData(form).entries());
@@ -164,10 +164,9 @@ function showLogin(mode, msg) {
   $('#login').classList.remove('hidden');
   const help = $('#loginHelp');
   const row = $('#loginTokenRow');
-  $('#loginTerm').open = mode === 'sin_token';
   if (mode === 'sin_token') {
     row.classList.add('hidden');
-    help.innerHTML = 'Por seguridad, mientras no exista un token de acceso el panel solo se abre desde el mismo computador donde corre el Motor. Crea uno con <code>motor token generar</code> y vuelve a entrar desde aquí.';
+    help.innerHTML = 'Por seguridad, mientras no exista un token de acceso el panel solo se abre desde el mismo computador donde corre el Motor. Abre el panel desde ese computador (dirección http://localhost), entra a Conexiones → Seguridad y acceso, crea el token y úsalo aquí.';
   } else {
     row.classList.remove('hidden');
     help.textContent = mode === 'invalido' ? 'El token no es correcto. Inténtalo de nuevo.' : 'Escribe el token de administrador.';
@@ -191,6 +190,7 @@ const VIEWS = {
   pedidos: () => renderPedidos(),
   simulador: () => window.renderSimulador(),
   productos: (arg) => window.renderProductos(arg),
+  envios: () => window.renderEnvios(),
   conexiones: () => window.renderConexiones(),
   ajustes: () => window.renderAjustes(),
 };
@@ -263,6 +263,8 @@ function setupSteps(st) {
       desc: pr.activos > 0 ? `${pr.activos} activo(s) de ${pr.total}` : 'Crea o activa un producto con su costo, flete y ofertas.', go: 'productos' },
     { done: pr.activos > 0 && pr.costo_confirmado >= pr.activos, required: false, title: 'Confirmar costos con el proveedor',
       desc: 'Mientras el costo no esté confirmado, la rentabilidad mostrada es estimada.', go: 'productos' },
+    { done: !!(st.dropi && st.dropi.conectado), required: false, title: 'Conectar Dropi (opcional)',
+      desc: st.dropi && st.dropi.conectado ? 'Conectado: el Motor cotiza fletes reales y compara transportadoras' : 'Pega tu token de Dropi en Conexiones para cotizar fletes reales y traer los costos de tus productos.', go: 'conexiones' },
     { done: pg.listo, required: true, title: 'Definir cómo cobrar los anticipos',
       desc: pg.listo ? (pg.metodo === 'wompi' ? 'Wompi con confirmación automática' : 'Pago manual con comprobante') : 'Llave Bre-B o cuenta bancaria, o llaves de Wompi.', go: 'conexiones' },
     { done: wa.configurado, required: true, title: 'Conectar WhatsApp Business',
@@ -281,7 +283,7 @@ async function renderInicio() {
   const pending = steps.filter((s) => !s.done);
   const doneN = steps.length - pending.length;
   $('#setupBox').innerHTML = pending.length ? `<div class="card" style="margin-bottom:18px">
-    <div class="card-head"><div><h3>Puesta en marcha</h3><div class="desc">${doneN} de ${steps.length} pasos completados. Todo se puede hacer aquí o desde la terminal.</div></div></div>
+    <div class="card-head"><div><h3>Puesta en marcha</h3><div class="desc">${doneN} de ${steps.length} pasos completados. Todo se hace desde este panel.</div></div></div>
     <div class="progress"><i style="width:${Math.round(doneN / steps.length * 100)}%"></i></div>
     <div class="steps">${steps.map((s) => `<div class="step ${s.done ? 'done' : ''}">
       <span class="dot">${s.done ? ic('check') : ''}</span>
@@ -345,10 +347,27 @@ function orderKV(o) {
     <dt>Celular</dt><dd>${esc(o.customer_phone || '-')}</dd>
     <dt>Dirección</dt><dd>${esc(addr || '-')}</dd>
     <dt>Barrio / ciudad</dt><dd>${esc(o.neighborhood || '-')} · ${esc(o.city || '-')}, ${esc(o.department || '-')}</dd>
-    <dt>Transportadora</dt><dd>${esc(o.carrier || '-')} <span class="small muted">(sugerida)</span></dd>
+    <dt>Transportadora</dt><dd>${esc(o.carrier || '-')} ${carrierSrc(o)}</dd>
     <dt>Regla de zona</dt><dd class="small">${esc(o.zone_reason || '-')}</dd>
     ${o.notes ? `<dt>Notas</dt><dd class="small">${esc(o.notes)}</dd>` : ''}
   </dl>`;
+}
+
+// De dónde sale el flete mostrado: Dropi (real) o el estimado del producto.
+function carrierSrc(o) {
+  const p = profitOf(o);
+  if (p.fuente_flete === 'dropi') return '<span class="tag ok">Flete real de Dropi</span>';
+  if (p.fuente_flete === 'estimado') return '<span class="tag warn">Flete estimado</span>';
+  return '<span class="small muted">(sugerida)</span>';
+}
+
+function carrierOptions(o) {
+  const p = profitOf(o); const list = p.transportadoras || [];
+  if (list.length < 2) return p.advertencia_transportadora ? `<div class="small" style="color:var(--warn)">${ic('alert', 13)} ${esc(p.advertencia_transportadora)}</div>` : '';
+  return `<details class="carr-opts"><summary>${ic('truck', 13)} Comparación de transportadoras (${list.length})</summary>
+    <table class="qtable"><thead><tr><th>Transportadora</th><th >Flete</th><th >Ganancia esperada</th></tr></thead><tbody>
+    ${list.map((t) => `<tr class="${t.mejor ? 'best' : ''}"><td>${esc(t.transportadora)} ${t.mejor ? '<span class="tag brand">Elegida</span>' : ''}</td><td >${cop(t.flete)}</td><td >${cop(t.ganancia_esperada)}</td></tr>`).join('')}</tbody></table>
+    ${p.advertencia_transportadora ? `<div class="small" style="color:var(--warn)">${ic('alert', 13)} ${esc(p.advertencia_transportadora)}</div>` : ''}</details>`;
 }
 
 function moneyBox(o) {
@@ -363,7 +382,7 @@ function moneyBox(o) {
       <div><b>${cop(r.ganancia_si_entrega)}</b><span>Ganancia si entrega</span></div>
       <div><b>${cop(r.ganancia_esperada)}</b><span>Esperada (dev. ${pct(r.tasa_devolucion)})</span></div>
       <div><b>${cop(p.cpa_objetivo)}</b><span>CPA máx. anuncios</span></div>
-    </div>${warn.map((x) => `<div class="small" style="color:var(--warn)">${ic('alert', 13)} ${esc(x)}</div>`).join('')}`;
+    </div>${carrierOptions(o)}${warn.map((x) => `<div class="small" style="color:var(--warn)">${ic('alert', 13)} ${esc(x)}</div>`).join('')}`;
 }
 
 function orderCard(o, actions) {
@@ -562,5 +581,5 @@ async function boot() {
 Object.assign(window, {
   S, $, $$, esc, cop, usd, pct, ic, hydrateIcons, fmtTime, waFormat, toast, api, post, put, del, mediaURL, statusTag, payTag, riskTag,
   contactName, contactLabel, openChat, openModal, closeModal, loadContacts, profitOf, orderKV, moneyBox, STATUS, STAGE,
-  scheduleRefresh, boot, notice, termBlock, fld, formData, busy, setupSteps, refreshBadges, go,
+  scheduleRefresh, boot, notice, fld, formData, busy, setupSteps, refreshBadges, go,
 });

@@ -186,6 +186,9 @@ func (s *Settings) Validate() error {
 	if n.Dropi.Modo != "manual" && n.Dropi.Modo != "api" {
 		return errors.New("el modo de Dropi debe ser 'manual' o 'api'")
 	}
+	if t := s.General.AdminToken; t != "" && (s.WhatsApp.Token == t || s.WhatsApp.VerifyToken == t || s.WhatsApp.AppSecret == t) {
+		return errors.New("el dato de WhatsApp es igual al token de acceso del panel: seguramente el navegador lo rellenó solo. Pega aquí el valor que te dio Meta")
+	}
 	s.Dropi.Token = strings.TrimSpace(s.Dropi.Token)
 	s.Dropi.OriginDept = strings.TrimSpace(s.Dropi.OriginDept)
 	s.Dropi.OriginCity = strings.TrimSpace(s.Dropi.OriginCity)
@@ -267,6 +270,7 @@ const (
 	keyGeneral  = "general"
 	keyNegocio  = "negocio"
 	keyReady    = "_seeded"
+	keyMigWait  = "_mig_espera_60"
 )
 
 // Manager persists Settings and notifies listeners on every change.
@@ -299,6 +303,24 @@ func Open(ctx context.Context, st *store.Store, seedFn func() Settings) (*Manage
 	}
 	if _, err := m.Reload(ctx); err != nil {
 		return nil, err
+	}
+	// One-time: the wait to group a customer's messages is now 1 minute by
+	// default (people write in separate lines). Owners can change it later.
+	if _, err := st.GetSetting(ctx, keyMigWait); errors.Is(err, store.ErrNotFound) {
+		if cur := m.Get(); cur.Negocio.Conversacion.EsperaAgruparSeg < config.DefaultEsperaAgruparSeg {
+			_ = m.Update(ctx, func(s *Settings) error {
+				s.Negocio.Conversacion.EsperaAgruparSeg = config.DefaultEsperaAgruparSeg
+				return nil
+			})
+		}
+		_ = st.SetSetting(ctx, keyMigWait, "1")
+		// The marker bumped the DB revision: record it so the next Reload
+		// does not report a change nobody made.
+		if rev, err := st.SettingsRevision(ctx); err == nil {
+			m.mu.Lock()
+			m.rev = rev
+			m.mu.Unlock()
+		}
 	}
 	return m, nil
 }
@@ -336,7 +358,28 @@ func (m *Manager) load(ctx context.Context) (Settings, error) {
 		}
 	}
 	s.Negocio.ApplyDefaults()
+	s.healAutofill()
 	return s, nil
+}
+
+// healAutofill clears WhatsApp secrets that are identical to the panel token.
+// That can only happen when a browser password manager filled the login token
+// into a WhatsApp field and the form was saved: it is never a real credential.
+func (s *Settings) healAutofill() {
+	t := s.General.AdminToken
+	if t == "" {
+		return
+	}
+	w := &s.WhatsApp
+	if w.Token == t {
+		w.Token = ""
+	}
+	if w.VerifyToken == t {
+		w.VerifyToken = ""
+	}
+	if w.AppSecret == t {
+		w.AppSecret = ""
+	}
 }
 
 // Get returns a copy of the current settings.

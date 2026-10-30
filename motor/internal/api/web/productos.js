@@ -28,13 +28,7 @@ async function renderProductList(root) {
       <button class="btn" id="pZone">${ic('truck', 14)} Consultar zona de envío</button>
       <button class="btn" id="pGuide">${ic('edit', 14)} Guía de ventas</button>
       <a class="btn primary" href="#productos/nuevo">${ic('plus', 14)} Nuevo producto</a></div>
-    ${list.length ? `<div class="cards">${list.map(productCard).join('')}</div>` : `<div class="card"><div class="empty">Aún no tienes productos. Crea el primero para que la IA pueda venderlo.</div></div>`}
-    ${termBlock('Gestionar productos desde la terminal', `motor productos listar
-motor productos agregar --sku GOMITAS-60 --nombre "Gomitas 60" --costo 38000 --flete 15000 \\
-      --oferta x1:1:89900 --oferta x2:2:149900
-motor productos importar producto.yaml      # alta completa desde un archivo
-motor productos exportar GOMITAS-60 > producto.yaml
-motor productos activar GOMITAS-60`)}`;
+    ${list.length ? `<div class="cards">${list.map(productCard).join('')}</div>` : `<div class="card"><div class="empty">Aún no tienes productos. Crea el primero para que la IA pueda venderlo.</div></div>`}`;
   $$('.pcard', root).forEach((c) => { c.onclick = () => { location.hash = 'productos/' + encodeURIComponent(c.dataset.sku); }; });
   $('#pGuide').onclick = openGuide;
   $('#pZone').onclick = () => openZone(list);
@@ -123,7 +117,7 @@ function drawProduct(root) {
         <div class="fgrid">
           <label class="field"><span>Costo del producto (COP, por unidad)</span><input data-f="costo_proveedor" type="number" min="0" step="100" value="${p.costo_proveedor || 0}"></label>
           <label class="field"><span>Flete estimado (COP, por envío)</span><input data-f="flete_estimado" type="number" min="0" step="100" value="${p.flete_estimado || 0}"></label>
-          <label class="field"><span>ID del producto en Dropi (opcional)</span><input data-f="dropi_product_id" value="${esc(p.dropi_product_id)}"></label>
+          <label class="field"><span>ID del producto en Dropi (opcional)</span><div class="inline"><input data-f="dropi_product_id" value="${esc(p.dropi_product_id)}"><button class="btn" type="button" id="pPullCost" ${PS.isNew ? 'disabled title="Guarda el producto primero"' : ''}>${ic('refresh', 14)} Traer costos de Dropi</button></div><small>Con el ID, el Motor copia el costo real desde Dropi y lo marca como confirmado. Requiere Dropi conectado en Conexiones.</small></label>
           <label class="switch" style="align-self:end"><input data-f="costo_confirmado" type="checkbox" ${p.costo_confirmado ? 'checked' : ''}><div><b>Costo confirmado</b><span>Márcalo cuando el proveedor confirmó costo y flete.</span></div></label>
         </div></div>
       <div class="card" style="margin-top:14px"><div class="card-head"><div><h3>Ofertas</h3><div class="desc">Combos que la IA puede ofrecer. Marca como principal la que debe recomendar primero.</div></div></div>
@@ -145,12 +139,7 @@ function drawProduct(root) {
         <div id="objRows">${(p.objeciones || []).map(objRow).join('')}</div>
         <button class="btn small" type="button" id="addObj">${ic('plus', 13)} Agregar objeción</button></div>
     </div>
-    </form>
-    ${PS.isNew ? '' : termBlock('Gestionar este producto desde la terminal', `motor productos ver ${p.sku}
-motor productos editar ${p.sku} --costo ${p.costo_proveedor || 0} --flete ${p.flete_estimado || 0} --costo-confirmado=true
-motor productos exportar ${p.sku} > ${p.sku}.yaml     # editar todo el archivo
-motor productos importar ${p.sku}.yaml
-motor productos ${p.activo ? 'desactivar' : 'activar'} ${p.sku}`)}`;
+    </form>`;
   showTab(PS.tab);
   bindProduct(root);
 }
@@ -204,6 +193,16 @@ function bindProduct(root) {
   };
   $('#addObj').onclick = () => $('#objRows').insertAdjacentHTML('beforeend', objRow({ objecion: '', respuesta: '' }));
   $('#pSave').onclick = (e) => busy(e.currentTarget, saveProduct);
+  const pc = $('#pPullCost');
+  if (pc) pc.onclick = (e) => busy(e.currentTarget, async () => {
+    try {
+      const idv = $('[data-f="dropi_product_id"]').value.trim();
+      if (idv !== (PS.p.dropi_product_id || '')) await saveProduct();
+      const r = await post('/api/productos/' + encodeURIComponent(PS.sku) + '/costos-dropi');
+      toast(`Costo traído de Dropi: ${cop(r.costo)} por unidad (antes ${cop(r.costo_anterior)}). Ya está confirmado.`);
+      await openProduct($('#productos'), PS.sku);
+    } catch (err) { toast(err.message, true); }
+  });
   const tg = $('#pToggle');
   if (tg) tg.onclick = (e) => busy(e.currentTarget, async () => {
     try {
@@ -268,7 +267,7 @@ function drawEconomics(eco, sup) {
       ${o.contraentrega.advertencia ? `<div class="small" style="color:var(--warn)">${ic('alert', 13)} ${esc(o.contraentrega.advertencia)}</div>` : ''}</div>`).join('');
   box.innerHTML = `
     ${PS.p && PS.p.costo_confirmado ? '' : notice('warn', 'El costo y el flete aún no están confirmados con el proveedor, así que estas cifras son estimadas.')}
-    <div class="card" style="margin-bottom:14px"><div class="card-head"><div><h3>Supuestos del negocio</h3><div class="desc">Aplican a todos los productos. Se cambian en <a href="#ajustes">Ajustes</a> o con <code>motor negocio poner finanzas.tasa_devolucion 25%</code>.</div></div></div>
+    <div class="card" style="margin-bottom:14px"><div class="card-head"><div><h3>Supuestos del negocio</h3><div class="desc">Aplican a todos los productos. Se cambian en <a href="#ajustes">Ajustes</a>.</div></div></div>
       <div class="kpis"><div class="kpi"><div class="l">Devoluciones esperadas</div><div class="v">${pct(sup.tasa_devolucion)}</div></div>
       <div class="kpi"><div class="l">Margen de seguridad</div><div class="v">${pct(sup.margen_seguridad)}</div></div>
       <div class="kpi"><div class="l">Pedidos que se confirman</div><div class="v">${pct(sup.tasa_confirmacion)}</div></div>
@@ -298,9 +297,7 @@ async function openGuide() {
   openModal(`<h3>Guía de ventas de la IA</h3>
     <p class="small muted">Instrucciones generales que la IA sigue con todos los productos: tono, cómo manejar objeciones, cuándo pedir los datos, qué nunca decir. Se escribe en texto normal (Markdown).</p>
     <textarea id="guideText" rows="16" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px">${esc(texto)}</textarea>
-    <div class="form-actions"><button class="btn primary" id="guideSave">Guardar guía</button><button class="btn" data-close>Cerrar</button></div>
-    ${termBlock('Desde la terminal', `motor guia ver > guia.md
-motor guia poner guia.md`)}`, true);
+    <div class="form-actions"><button class="btn primary" id="guideSave">Guardar guía</button><button class="btn" data-close>Cerrar</button></div>`, true);
   $('#guideSave').onclick = (e) => busy(e.currentTarget, async () => {
     try { await put('/api/guia-ventas', { texto: $('#guideText').value }); toast('Guía guardada. La IA la usa desde el próximo mensaje.'); closeModal(); } catch (err) { toast(err.message, true); }
   });

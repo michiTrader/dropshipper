@@ -137,7 +137,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 				return
 			}
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
-				"error":          "el panel solo está disponible desde este computador hasta que definas un token de acceso (terminal: motor token generar)",
+				"error":          "el panel solo está disponible desde este computador hasta que definas un token de acceso (en Conexiones, Seguridad y acceso)",
 				"requiere_token": true, "sin_token": true,
 			})
 			return

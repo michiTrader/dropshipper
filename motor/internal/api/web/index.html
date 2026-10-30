@@ -7,6 +7,7 @@
   <title>Dropshipper · Motor</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -18,16 +19,10 @@
     <h1>Acceso al panel</h1>
     <p id="loginHelp" class="muted small" style="margin:0">Escribe el token de administrador.</p>
     <label class="field" id="loginTokenRow"><span>Token de administrador</span>
-      <input id="tokenInput" type="password" placeholder="Token" autocomplete="current-password">
+      <input id="tokenInput" name="panel_admin_access" type="password" placeholder="Token" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other">
     </label>
     <button class="btn primary" type="submit">Entrar</button>
     <div id="loginError" class="error"></div>
-    <details class="term" id="loginTerm">
-      <summary><i data-ic="terminal"></i> Cómo obtener o cambiar el token</summary>
-      <p class="small muted">En el equipo donde corre el Motor, desde una terminal:</p>
-      <pre class="term">motor token generar     # crea un token y lo muestra una sola vez
-motor token quitar      # sin token, el panel solo abre desde el mismo equipo</pre>
-    </details>
   </form>
 </div>
 
@@ -43,9 +38,11 @@ motor token quitar      # sin token, el panel solo abre desde el mismo equipo</p
       <a href="#simulador" data-view="simulador"><i data-ic="flask"></i><span>Simulador</span></a>
       <div class="nav-group">Configuración</div>
       <a href="#productos" data-view="productos"><i data-ic="tag"></i><span>Productos</span></a>
+      <a href="#envios" data-view="envios"><i data-ic="truck"></i><span>Envíos</span></a>
       <a href="#conexiones" data-view="conexiones"><i data-ic="plug"></i><span>Conexiones</span><span class="badge" id="badgeConn" style="background:var(--warn)"></span></a>
       <a href="#ajustes" data-view="ajustes"><i data-ic="sliders"></i><span>Ajustes</span></a>
     </nav>
+    <button class="theme-toggle" id="themeToggle" type="button" title="Cambiar tema"><span id="themeIcon"></span><span id="themeLabel">Tema</span></button>
     <div class="sidebar-foot" id="liveDot"><i></i><span id="liveText">Sin conexión en vivo</span></div>
   </aside>
 
@@ -111,6 +108,7 @@ motor token quitar      # sin token, el panel solo abre desde el mismo equipo</p
     </section>
 
     <section id="view-productos" class="view"><div id="productos"></div></section>
+    <section id="view-envios" class="view"><div id="envios"></div></section>
     <section id="view-conexiones" class="view"><div id="conexiones"></div></section>
     <section id="view-ajustes" class="view"><div id="ajustes"></div></section>
   </main>
@@ -123,6 +121,7 @@ motor token quitar      # sin token, el panel solo abre desde el mismo equipo</p
 <script src="/views.js"></script>
 <script src="/productos.js"></script>
 <script src="/conexiones.js"></script>
+<script src="/envios.js"></script>
 <script src="/ajustes.js"></script>
 <script src="/boot.js"></script>
 </body>
