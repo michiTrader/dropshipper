@@ -21,6 +21,7 @@ import (
 	"github.com/michiTrader/dropshipper/motor/internal/rules"
 	"github.com/michiTrader/dropshipper/motor/internal/sales"
 	"github.com/michiTrader/dropshipper/motor/internal/settings"
+	"github.com/michiTrader/dropshipper/motor/internal/shipping"
 	"github.com/michiTrader/dropshipper/motor/internal/store"
 )
 
@@ -57,12 +58,23 @@ func newEnv(t *testing.T, token string) *env {
 	h := hub.New()
 	live := config.NewLive(set.Get().Negocio)
 	set.OnChange(func(s settings.Settings) { h.Apply(s); live.Set(s.Negocio) })
-	sv := &sales.Service{Store: st, Catalog: cat, Zones: zones, Negocio: live, Payments: h}
+	ship := &shipping.Service{
+		Negocio: live,
+		Client: func() shipping.Quoter {
+			if c := h.Dropi(); c != nil {
+				return c
+			}
+			return nil
+		},
+		Origin: func() (string, string) { d := h.Settings().Dropi; return d.OriginDept, d.OriginCity },
+	}
+	set.OnChange(func(settings.Settings) { ship.Clear() })
+	sv := &sales.Service{Store: st, Catalog: cat, Zones: zones, Negocio: live, Payments: h, Shipping: ship}
 	seller := &agent.Seller{LLM: h.AI, Sales: sv, Store: st, Catalog: cat, Zones: zones, Negocio: live}
 	eng := convo.NewEngine(st, seller, sv, h, live, log.New(io.Discard, "", 0))
 	sv.Notifier = eng
 	t.Cleanup(eng.Close)
-	srv := &Server{Settings: set, Hub: h, Store: st, Engine: eng, Sales: sv, Catalog: cat, Zones: zones,
+	srv := &Server{Settings: set, Hub: h, Store: st, Engine: eng, Sales: sv, Catalog: cat, Zones: zones, Shipping: ship,
 		MediaDir: t.TempDir(), Log: log.New(io.Discard, "", 0)}
 	return &env{srv: srv, h: srv.Handler(), set: set, cat: cat}
 }

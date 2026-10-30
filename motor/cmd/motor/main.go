@@ -32,6 +32,7 @@ import (
 	"github.com/michiTrader/dropshipper/motor/internal/rules"
 	"github.com/michiTrader/dropshipper/motor/internal/sales"
 	"github.com/michiTrader/dropshipper/motor/internal/settings"
+	"github.com/michiTrader/dropshipper/motor/internal/shipping"
 	"github.com/michiTrader/dropshipper/motor/internal/store"
 )
 
@@ -110,14 +111,25 @@ func serve(dir string, lg *log.Logger) error {
 		live.Set(s.Negocio)
 	})
 
-	sv := &sales.Service{Store: a.st, Catalog: a.cat, Zones: zones, Negocio: live, Payments: h}
+	ship := &shipping.Service{
+		Negocio: live,
+		Client: func() shipping.Quoter {
+			if c := h.Dropi(); c != nil {
+				return c
+			}
+			return nil
+		},
+		Origin: func() (string, string) { d := h.Settings().Dropi; return d.OriginDept, d.OriginCity },
+	}
+	a.set.OnChange(func(settings.Settings) { ship.Clear() })
+	sv := &sales.Service{Store: a.st, Catalog: a.cat, Zones: zones, Negocio: live, Payments: h, Shipping: ship}
 	seller := &agent.Seller{LLM: h.AI, Sales: sv, Store: a.st, Catalog: a.cat, Zones: zones, Negocio: live}
 	engine := convo.NewEngine(a.st, seller, sv, h, live, lg)
 	sv.Notifier = engine
 	defer engine.Close()
 
 	srv := &api.Server{
-		Settings: a.set, Hub: h, Store: a.st, Engine: engine, Sales: sv, Catalog: a.cat, Zones: zones,
+		Settings: a.set, Hub: h, Store: a.st, Engine: engine, Sales: sv, Catalog: a.cat, Zones: zones, Shipping: ship,
 		MediaDir: filepath.Join(cfg.DataDir, "media"), Log: lg, Started: time.Now().UTC(),
 	}
 	httpSrv := &http.Server{

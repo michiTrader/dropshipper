@@ -303,6 +303,7 @@ func (c *Client) complete(ctx context.Context, base string, body []byte) (Respon
 			return Response{}, fmt.Errorf("respuesta de IA vacía: %s", snippet(raw))
 		}
 		ch := parsed.Choices[0]
+		ch.Message.Content = StripThinking(ch.Message.Content)
 		return Response{Message: ch.Message, FinishReason: ch.FinishReason, Usage: parsed.Usage}, nil
 	}
 	return Response{}, lastErr

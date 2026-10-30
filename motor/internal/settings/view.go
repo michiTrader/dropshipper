@@ -65,6 +65,24 @@ type WompiView struct {
 	EventsURL    string `json:"events_url"`
 }
 
+// DropiView is the Dropi section (token masked).
+type DropiView struct {
+	Token      Secret `json:"token"`
+	Sandbox    bool   `json:"sandbox"`
+	OriginDept string `json:"origen_departamento"`
+	OriginCity string `json:"origen_ciudad"`
+	Configured bool   `json:"configurado"`
+	BaseURL    string `json:"base_url"`
+}
+
+// DropiBase is the Dropi Integrations API base URL for the environment.
+func DropiBase(sandbox bool) string {
+	if sandbox {
+		return "https://test-api.dropi.co/integrations"
+	}
+	return "https://api.dropi.co/integrations"
+}
+
 // GeneralView is the security/general section.
 type GeneralView struct {
 	PublicURL  string `json:"url_publica"`
@@ -77,6 +95,7 @@ type View struct {
 	IA       IAView       `json:"ia"`
 	WhatsApp WhatsAppView `json:"whatsapp"`
 	Wompi    WompiView    `json:"wompi"`
+	Dropi    DropiView    `json:"dropi"`
 	General  GeneralView  `json:"general"`
 	Negocio  any          `json:"negocio"`
 }
@@ -104,6 +123,9 @@ func (s Settings) Public(webhookBase string) View {
 	o := s.Wompi
 	v.Wompi = WompiView{PublicKey: o.PublicKey, PrivateKey: NewSecret(o.PrivateKey), EventsSecret: NewSecret(o.EventsSecret),
 		Sandbox: o.Sandbox, Configured: o.Enabled(), EventsURL: base + "/webhook/wompi"}
+	d := s.Dropi
+	v.Dropi = DropiView{Token: NewSecret(d.Token), Sandbox: d.Sandbox, OriginDept: d.OriginDept, OriginCity: d.OriginCity,
+		Configured: d.Enabled(), BaseURL: DropiBase(d.Sandbox)}
 	v.General = GeneralView{PublicURL: s.General.PublicURL, Token: NewSecret(s.General.AdminToken), WebhookURL: base + "/webhook/whatsapp"}
 	return v
 }

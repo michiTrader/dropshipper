@@ -40,6 +40,7 @@ func (s *Server) settingsRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/ia/proveedores/{pid}/activar", s.activateProvider)
 	api.HandleFunc("POST /api/ia/probar", s.testProvider)
 	api.HandleFunc("POST /api/ia/modelos", s.listModels)
+	s.dropiRoutes(api)
 }
 
 // origin is the scheme://host the browser used, to show webhook URLs when no
@@ -588,7 +589,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			"metodo": n.Pagos.Metodo, "listo": pagoListo, "wompi": wompi,
 			"llave_bre_b": n.Pagos.Manual.LlaveBreB != "", "cuenta": n.Pagos.Manual.NumeroCuenta != "",
 		},
-		"dropi":          map[string]any{"modo": n.Dropi.Modo},
+		"dropi": map[string]any{"modo": n.Dropi.Modo, "conectado": s.Hub.Dropi() != nil, "sandbox": st.Dropi.Sandbox,
+			"origen": strings.TrimSpace(st.Dropi.OriginCity + " " + st.Dropi.OriginDept)},
 		"productos":      map[string]any{"total": len(prods), "activos": active, "costo_confirmado": confirmed},
 		"autonomia":      n.Autonomia,
 		"aviso_dueno":    n.Notificar.WhatsAppDueno != "",

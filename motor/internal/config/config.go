@@ -68,15 +68,18 @@ func (w WompiConfig) Enabled() bool { return w.PrivateKey != "" }
 
 // Negocio is the editable business configuration (negocio.yaml).
 type Negocio struct {
-	NombreTienda string        `yaml:"nombre_tienda" json:"nombre_tienda"`
-	Ciudad       string        `yaml:"ciudad" json:"ciudad"`
-	Persona      Persona       `yaml:"persona" json:"persona"`
-	Pagos        Pagos         `yaml:"pagos" json:"pagos"`
-	Autonomia    Autonomia     `yaml:"autonomia" json:"autonomia"`
-	Conversacion Conversacion  `yaml:"conversacion" json:"conversacion"`
-	Finanzas     FinanzasConf  `yaml:"finanzas" json:"finanzas"`
-	Dropi        DropiConf     `yaml:"dropi" json:"dropi"`
-	Notificar    NotificarConf `yaml:"notificar" json:"notificar"`
+	NombreTienda string       `yaml:"nombre_tienda" json:"nombre_tienda"`
+	Ciudad       string       `yaml:"ciudad" json:"ciudad"`
+	Persona      Persona      `yaml:"persona" json:"persona"`
+	Pagos        Pagos        `yaml:"pagos" json:"pagos"`
+	Autonomia    Autonomia    `yaml:"autonomia" json:"autonomia"`
+	Conversacion Conversacion `yaml:"conversacion" json:"conversacion"`
+	Finanzas     FinanzasConf `yaml:"finanzas" json:"finanzas"`
+	Dropi        DropiConf    `yaml:"dropi" json:"dropi"`
+	// Transportadoras: the carriers the owner works with. Notes feed the AI
+	// system prompt; the return rate and priority drive the carrier choice.
+	Transportadoras []Transportadora `yaml:"transportadoras" json:"transportadoras"`
+	Notificar       NotificarConf    `yaml:"notificar" json:"notificar"`
 }
 
 // Persona describes how the seller agent presents itself.
@@ -136,6 +139,62 @@ type FinanzasConf struct {
 // DropiConf: until API access is granted, orders are uploaded by hand.
 type DropiConf struct {
 	Modo string `yaml:"modo" json:"modo"` // "manual" | "api"
+}
+
+// DropiConfig holds the Dropi Integrations API credentials (stored in the DB,
+// never in negocio.yaml).
+type DropiConfig struct {
+	// Token is the integration key from Dropi > Configuración > Integraciones.
+	Token string `json:"token"`
+	// Sandbox uses test-api.dropi.co (no carriers: it cannot quote freight).
+	Sandbox bool `json:"sandbox"`
+	// OriginDept / OriginCity is where the owner ships from (quote origin).
+	OriginDept string `json:"origen_departamento"`
+	OriginCity string `json:"origen_ciudad"`
+}
+
+// Enabled reports whether the Dropi API can be called.
+func (d DropiConfig) Enabled() bool { return strings.TrimSpace(d.Token) != "" }
+
+// Transportadora is one carrier the owner can use through Dropi.
+type Transportadora struct {
+	ID     string `yaml:"id" json:"id"`
+	Nombre string `yaml:"nombre" json:"nombre"`
+	Activa bool   `yaml:"activa" json:"activa"`
+	// Aliases are other spellings Dropi may use for the same carrier.
+	Alias []string `yaml:"alias" json:"alias"`
+	// Notas: what the AI must know (coverage, strengths, cash-on-delivery,
+	// delivery times...). Injected into the system prompt.
+	Notas string `yaml:"notas" json:"notas"`
+	// TasaDevolucion: this carrier's own return rate (0..1); 0 = use the
+	// business default adjusted by zone.
+	TasaDevolucion float64 `yaml:"tasa_devolucion" json:"tasa_devolucion"`
+	// Prioridad breaks ties (lower wins).
+	Prioridad int `yaml:"prioridad" json:"prioridad"`
+	// Zonas the carrier is best for (department names), a hint for the AI and
+	// the fallback when Dropi cannot quote.
+	Zonas []string `yaml:"zonas" json:"zonas"`
+}
+
+// DefaultTransportadoras are the ten carriers available through Dropi
+// Colombia, all active, with neutral notes the owner can edit.
+func DefaultTransportadoras() []Transportadora {
+	mk := func(id, name string, prio int, notes string, alias ...string) Transportadora {
+		return Transportadora{ID: id, Nombre: name, Activa: true, Prioridad: prio, Notas: notes, Alias: alias}
+	}
+	return []Transportadora{
+		mk("coordinadora", "Coordinadora", 1, "Cobertura nacional amplia, buena en ciudades principales y municipios intermedios. Contraentrega disponible."),
+		mk("interrapidisimo", "Interrapidísimo", 2, "Muy buena cobertura en municipios pequeños y zonas apartadas. Contraentrega disponible.", "inter rapidisimo", "interrapidísimo"),
+		mk("envia", "Envía", 3, "Cobertura nacional, competitiva en precio en ciudades principales.", "envia", "envía"),
+		mk("tcc", "TCC", 4, "Fuerte en ciudades principales y corredores industriales."),
+		mk("servientrega", "Servientrega", 99, "Respaldo. Desactivada por defecto si no la usas.", "servi entrega"),
+		mk("veloces", "Veloces", 5, "Transportadora regional/urbana; confirma cobertura antes de ofrecerla.", "veloces"),
+		mk("domina", "Domina", 6, "Entrega urbana; confirma cobertura antes de ofrecerla.", "domina entrega total", "dominaentregatotal"),
+		mk("99minutos", "99minutos", 7, "Entrega rápida urbana en ciudades principales.", "99 minutos"),
+		mk("wiilog", "Wiilog", 8, "Operador logístico; confirma cobertura antes de ofrecerla.", "wilog", "willog"),
+		mk("jamv-drive", "Jamv-drive", 9, "Entrega local; confirma cobertura antes de ofrecerla.", "jamv drive", "jamvdrive"),
+		mk("derocha-express", "Derocha-express", 10, "Entrega local/regional; confirma cobertura antes de ofrecerla.", "derocha express", "derochaexpress"),
+	}
 }
 
 // NotificarConf: the owner's own WhatsApp number to receive alerts.
@@ -251,6 +310,56 @@ func (n *Negocio) ApplyDefaults() {
 	if n.Dropi.Modo == "" {
 		n.Dropi.Modo = "manual"
 	}
+	if len(n.Transportadoras) == 0 {
+		n.Transportadoras = DefaultTransportadoras()
+		for i := range n.Transportadoras {
+			if n.Transportadoras[i].ID == "servientrega" {
+				n.Transportadoras[i].Activa = false
+			}
+		}
+	}
+	for i := range n.Transportadoras {
+		t := &n.Transportadoras[i]
+		t.Nombre = strings.TrimSpace(t.Nombre)
+		if t.ID == "" {
+			t.ID = CarrierID(t.Nombre)
+		}
+	}
+}
+
+// CarrierID makes a stable id from a carrier name ("Envía" -> "envia").
+func CarrierID(name string) string {
+	r := strings.NewReplacer("á", "a", "é", "e", "í", "i", "ó", "o", "ú", "u", "ñ", "n", "Á", "a", "É", "e", "Í", "i", "Ó", "o", "Ú", "u")
+	name = strings.ToLower(r.Replace(strings.TrimSpace(name)))
+	var b strings.Builder
+	for _, c := range name {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-':
+			b.WriteRune(c)
+		case c == ' ' || c == '_':
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// Carrier finds a carrier by id, name or alias.
+func (n Negocio) Carrier(name string) (Transportadora, bool) {
+	key := CarrierID(name)
+	if key == "" {
+		return Transportadora{}, false
+	}
+	for _, t := range n.Transportadoras {
+		if t.ID == key || CarrierID(t.Nombre) == key {
+			return t, true
+		}
+		for _, a := range t.Alias {
+			if CarrierID(a) == key {
+				return t, true
+			}
+		}
+	}
+	return Transportadora{}, false
 }
 
 // AgruparDuration is the debounce window as a duration.

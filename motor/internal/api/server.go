@@ -26,6 +26,7 @@ import (
 	"github.com/michiTrader/dropshipper/motor/internal/rules"
 	"github.com/michiTrader/dropshipper/motor/internal/sales"
 	"github.com/michiTrader/dropshipper/motor/internal/settings"
+	"github.com/michiTrader/dropshipper/motor/internal/shipping"
 	"github.com/michiTrader/dropshipper/motor/internal/store"
 	"github.com/michiTrader/dropshipper/motor/internal/whatsapp"
 )
@@ -45,6 +46,7 @@ type Server struct {
 	Sales    *sales.Service
 	Catalog  *catalog.Catalog
 	Zones    *rules.ZoneRules
+	Shipping *shipping.Service
 	MediaDir string
 	Log      *log.Logger
 	Started  time.Time
