@@ -138,6 +138,7 @@ type Settings struct {
 	IA       IA                    `json:"ia"`
 	WhatsApp config.WhatsAppConfig `json:"whatsapp"`
 	Wompi    config.WompiConfig    `json:"wompi"`
+	Dropi    config.DropiConfig    `json:"dropi"`
 	General  General               `json:"general"`
 	Negocio  config.Negocio        `json:"negocio"`
 }
@@ -184,6 +185,23 @@ func (s *Settings) Validate() error {
 	}
 	if n.Dropi.Modo != "manual" && n.Dropi.Modo != "api" {
 		return errors.New("el modo de Dropi debe ser 'manual' o 'api'")
+	}
+	s.Dropi.Token = strings.TrimSpace(s.Dropi.Token)
+	s.Dropi.OriginDept = strings.TrimSpace(s.Dropi.OriginDept)
+	s.Dropi.OriginCity = strings.TrimSpace(s.Dropi.OriginCity)
+	ids := map[string]bool{}
+	for i := range n.Transportadoras {
+		t := &n.Transportadoras[i]
+		if t.Nombre == "" {
+			return errors.New("hay una transportadora sin nombre")
+		}
+		if ids[t.ID] {
+			return fmt.Errorf("la transportadora %q está repetida", t.Nombre)
+		}
+		ids[t.ID] = true
+		if t.TasaDevolucion < 0 || t.TasaDevolucion >= 1 {
+			return fmt.Errorf("la tasa de devolución de %s debe estar entre 0%% y 99%%", t.Nombre)
+		}
 	}
 	f := n.Finanzas
 	if f.TasaDevolucion < 0 || f.TasaDevolucion >= 1 {
@@ -245,6 +263,7 @@ const (
 	keyIA       = "ia"
 	keyWhatsApp = "whatsapp"
 	keyWompi    = "wompi"
+	keyDropi    = "dropi"
 	keyGeneral  = "general"
 	keyNegocio  = "negocio"
 	keyReady    = "_seeded"
@@ -285,7 +304,7 @@ func Open(ctx context.Context, st *store.Store, seedFn func() Settings) (*Manage
 }
 
 func (m *Manager) persist(ctx context.Context, s Settings) error {
-	parts := map[string]any{keyIA: s.IA, keyWhatsApp: s.WhatsApp, keyWompi: s.Wompi, keyGeneral: s.General, keyNegocio: s.Negocio}
+	parts := map[string]any{keyIA: s.IA, keyWhatsApp: s.WhatsApp, keyWompi: s.Wompi, keyDropi: s.Dropi, keyGeneral: s.General, keyNegocio: s.Negocio}
 	for k, v := range parts {
 		raw, err := json.Marshal(v)
 		if err != nil {
@@ -311,7 +330,7 @@ func (m *Manager) load(ctx context.Context) (Settings, error) {
 		return json.Unmarshal([]byte(raw), dst)
 	}
 	s.Negocio = config.DefaultNegocio()
-	for k, dst := range map[string]any{keyIA: &s.IA, keyWhatsApp: &s.WhatsApp, keyWompi: &s.Wompi, keyGeneral: &s.General, keyNegocio: &s.Negocio} {
+	for k, dst := range map[string]any{keyIA: &s.IA, keyWhatsApp: &s.WhatsApp, keyWompi: &s.Wompi, keyDropi: &s.Dropi, keyGeneral: &s.General, keyNegocio: &s.Negocio} {
 		if err := get(k, dst); err != nil {
 			return s, fmt.Errorf("leer configuración %q: %w", k, err)
 		}

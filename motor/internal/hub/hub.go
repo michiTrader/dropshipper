@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/michiTrader/dropshipper/motor/internal/dropi"
 	"github.com/michiTrader/dropshipper/motor/internal/llm"
 	"github.com/michiTrader/dropshipper/motor/internal/payments"
 	"github.com/michiTrader/dropshipper/motor/internal/settings"
@@ -25,6 +26,7 @@ type Hub struct {
 	cur   settings.Settings
 	wa    *whatsapp.Client
 	wompi *payments.Wompi
+	dropi *dropi.Client
 }
 
 // New creates an empty hub.
@@ -34,12 +36,15 @@ func New() *Hub { return &Hub{AI: &llm.Switch{}} }
 func (h *Hub) Apply(s settings.Settings) {
 	h.mu.Lock()
 	h.cur = s
-	h.wa, h.wompi = nil, nil
+	h.wa, h.wompi, h.dropi = nil, nil, nil
 	if s.WhatsApp.Enabled() {
 		h.wa = whatsapp.New(s.WhatsApp.Token, s.WhatsApp.PhoneNumberID, s.WhatsApp.GraphVersion)
 	}
 	if s.Wompi.Enabled() {
 		h.wompi = payments.NewWompi(s.Wompi.PrivateKey, s.Wompi.EventsSecret, s.Wompi.Sandbox)
+	}
+	if s.Dropi.Enabled() {
+		h.dropi = dropi.New(s.Dropi.Token, s.Dropi.Sandbox)
 	}
 	h.mu.Unlock()
 
@@ -71,6 +76,13 @@ func (h *Hub) Wompi() *payments.Wompi {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.wompi
+}
+
+// Dropi returns the live Dropi client (nil when no token is set).
+func (h *Hub) Dropi() *dropi.Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.dropi
 }
 
 // Available reports whether WhatsApp sending is configured. It lets the

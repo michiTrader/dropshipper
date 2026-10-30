@@ -51,6 +51,23 @@ Uso:  motor [-dir CARPETA] [comando]
     wompi configurar [--llave-publica P] [--llave-privada K|-] [--eventos S|-]
                      [--produccion | --pruebas]
 
+  dropi                    conexion con Dropi (fletes, costos, simulacion)
+    dropi ver | probar | quitar
+    dropi configurar [--token T|-] [--ciudad-origen C] [--departamento-origen D]
+                     [--produccion | --pruebas]
+    dropi cotizar  --ciudad C [--departamento D] [--producto SKU] [--oferta ID]
+                   compara transportadoras: flete, ganancia, perdida si devuelve
+    dropi simular  --ciudad C [--departamento D] [--producto SKU] [--oferta ID]
+                   ensayo de pedido: verifica fletes y costos SIN crear nada en Dropi
+    dropi costos SKU         trae el costo real del producto desde Dropi y lo confirma
+
+  transportadoras          transportadoras que usa la IA (Veloces, Envia, Coordinadora...)
+    transportadoras ver
+    transportadoras activar ID | desactivar ID
+    transportadoras notas ID TEXTO    lo que la IA debe saber (cobertura, tiempos, contraentrega)
+    transportadoras tasa ID 18%       devolucion propia (0 = tasa general)
+    transportadoras prioridad ID N    menor = se prefiere en empates
+
   token                    acceso al panel desde otros equipos
     token ver | generar | quitar
     token poner TOKEN      (minimo 8 caracteres)
@@ -96,6 +113,10 @@ func runCLI(dir string, args []string, out io.Writer) error {
 		return c.whatsapp(rest)
 	case "wompi":
 		return c.wompi(rest)
+	case "dropi":
+		return c.dropi(rest)
+	case "transportadoras":
+		return c.transportadoras(rest)
 	case "token":
 		return c.token(rest)
 	case "url":
@@ -204,6 +225,14 @@ func (c *cli) estado() error {
 	c.p("%s WhatsApp: %s", mark(s.WhatsApp.Enabled()), map[bool]string{true: "conectado", false: "motor whatsapp configurar ..."}[s.WhatsApp.Enabled()])
 	pagosOK := (n.Pagos.Metodo == "wompi" && s.Wompi.Enabled()) ||
 		(n.Pagos.Metodo == "manual" && (n.Pagos.Manual.LlaveBreB != "" || n.Pagos.Manual.NumeroCuenta != ""))
+	switch {
+	case s.Dropi.Enabled() && s.Dropi.OriginCity != "":
+		c.p("%s Dropi: conectado (%s), origen %s", mark(true), map[bool]string{true: "pruebas", false: "produccion"}[s.Dropi.Sandbox], s.Dropi.OriginCity)
+	case s.Dropi.Enabled():
+		c.p("%s Dropi: conectado pero falta la ciudad de origen (motor dropi configurar --ciudad-origen ...)", mark(false))
+	default:
+		c.p("%s Dropi: sin conectar; los fletes son estimados (motor dropi configurar --token -)", mark(false))
+	}
 	c.p("%s Pagos anticipados: %s", mark(pagosOK), n.Pagos.Metodo)
 	act := c.cat.Active()
 	conf := 0

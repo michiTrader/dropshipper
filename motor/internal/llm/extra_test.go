@@ -250,3 +250,18 @@ func TestFriendly402IncludesProviderMessage(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+func TestStripThinking(t *testing.T) {
+	cases := map[string]string{
+		"<think>razono</think>Hola":                  "Hola",
+		"razono mucho</think>\n\nHola, ¿cómo estás?": "Hola, ¿cómo estás?",
+		"Hola<think>sin cerrar":                      "Hola",
+		"Sin etiquetas":                              "Sin etiquetas",
+		"<think>a</think>Uno<think>b</think> dos":    "Uno dos",
+	}
+	for in, want := range cases {
+		if got := StripThinking(in); got != want {
+			t.Errorf("StripThinking(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

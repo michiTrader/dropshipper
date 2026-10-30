@@ -280,3 +280,40 @@ reinicia el Motor. Para comprobar que haria el Motor con un destino, usa **Produ
   orden sola y las guias se actualizaran automaticamente.
 - **DropKiller (MCP)**: requiere el plan **Advanced**.
 - **Meta Ads, landings y Cazador de productos**: fases 3 a 6 de la propuesta.
+
+## Dropi y transportadoras
+
+**Conectar Dropi** (Conexiones por API o terminal; ambas editan los mismos datos):
+
+```
+echo $TOKEN_DROPI | motor dropi configurar --token - --ciudad-origen Medellin --produccion
+motor dropi probar
+```
+
+- El token se crea en Dropi > Configuración > Integraciones.
+- El entorno de pruebas (`--pruebas`) NO tiene transportadoras: sirve para validar el token, no para cotizar fletes.
+- Cada producto necesita su "ID de Dropi" para traer el costo real (`motor dropi costos SKU`), que lo marca como confirmado.
+
+**"Costo sin confirmar"**: el producto tiene un costo estimado. Se confirma cuando lo marcas como confirmado o cuando usas `motor dropi costos SKU`. Conectar Dropi por sí solo no lo confirma.
+
+**Transportadoras** (Veloces, Envía, Interrapidísimo, Domina, Coordinadora, 99minutos, TCC, Wiilog, Jamv-drive, Derocha-express):
+
+```
+motor transportadoras ver
+motor transportadoras notas veloces "Buena en Medellin; no recibe contraentrega"
+motor transportadoras tasa envia 18%
+motor transportadoras desactivar tcc
+```
+
+Las notas se inyectan en el prompt de la IA. El Motor compara las activas con la fórmula de ganancia (ganancia si entrega, pérdida si devuelve, ganancia esperada) y elige la de mayor ganancia esperada.
+
+**Simular un pedido sin crear nada en Dropi**:
+
+```
+motor dropi cotizar  --ciudad Bogota --producto SKU
+motor dropi simular  --ciudad Bogota --producto SKU
+```
+
+Verifica conexión, flete cotizado frente al estimado, costo frente al de Dropi, costo confirmado, rentabilidad y código DANE, y muestra el pedido que se enviaría (no se envía).
+
+**Datos del cliente**: la IA pide correo electrónico, no cédula.

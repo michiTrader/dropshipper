@@ -20,6 +20,7 @@ import (
 	"github.com/michiTrader/dropshipper/motor/internal/catalog"
 	"github.com/michiTrader/dropshipper/motor/internal/config"
 	"github.com/michiTrader/dropshipper/motor/internal/rules"
+	"github.com/michiTrader/dropshipper/motor/internal/shipping"
 	"github.com/michiTrader/dropshipper/motor/internal/store"
 )
 
@@ -44,6 +45,9 @@ type Service struct {
 	Negocio  *config.Live
 	Notifier Notifier
 	Payments PaymentLinker // nil or unavailable = manual payments (Bre-B / Bancolombia + comprobante)
+	// Shipping picks the carrier and freight per order (Dropi quote when
+	// connected, product estimate otherwise). Optional.
+	Shipping *shipping.Service
 	Now      func() time.Time
 
 	mu sync.Mutex // serialises state changes (webhook vs. owner vs. agent)
@@ -63,7 +67,7 @@ type DraftInput struct {
 	ProductSKU   string `json:"producto_sku"`
 	OfferID      string `json:"oferta_id"`
 	Name         string `json:"nombre_completo"`
-	IDNumber     string `json:"cedula"`
+	IDNumber     string `json:"cedula,omitempty"` // optional: no longer requested
 	Phone        string `json:"celular"`
 	Department   string `json:"departamento"`
 	City         string `json:"ciudad"`
@@ -144,10 +148,11 @@ func (s *Service) UpsertDraft(ctx context.Context, phone string, in DraftInput) 
 	}
 	set(&o.CustomerName, titleCase(in.Name))
 	if v := digits(in.IDNumber); v != "" {
-		if len(v) < 6 || len(v) > 10 {
-			warnings = append(warnings, "la cédula parece incompleta (debe tener entre 6 y 10 dígitos); confírmala con el cliente")
-		}
-		o.CustomerIDNumber = v
+		o.CustomerIDNumber = v // only if the customer volunteers it
+	}
+	if v := strings.TrimSpace(in.Email); v != "" && !ValidEmail(v) {
+		warnings = append(warnings, "el correo no parece válido; pídeselo de nuevo con calma (ej: nombre@gmail.com)")
+		in.Email = ""
 	}
 	if v := strings.TrimSpace(in.Phone); v != "" {
 		norm, ok := NormalizeCOPhone(v)
@@ -177,7 +182,7 @@ func (s *Service) UpsertDraft(ctx context.Context, phone string, in DraftInput) 
 	if o.Department != "" && o.City != "" && o.Total > 0 {
 		d := s.Zones.Decide(rules.Destination{Department: o.Department, City: o.City, Neighborhood: o.Neighborhood}, o.Total)
 		zone = &d
-		s.applyZone(&o, d, product)
+		s.applyZone(ctx, &o, d, product)
 		if !d.Matched {
 			warnings = append(warnings, "no reconozco el departamento; verifica que esté bien escrito (se aplicó la regla por defecto, con anticipo)")
 		}
@@ -225,7 +230,7 @@ func (in DraftInput) changesOrder(o store.Order) bool {
 	}
 	return ch(in.OfferID, o.OfferID) || ch(in.ProductSKU, o.ProductSKU) || ch(in.Department, o.Department) || ch(in.City, o.City) ||
 		ch(in.Address, o.Address) || ch(in.Neighborhood, o.Neighborhood) || ch(titleCase(in.Name), o.CustomerName) ||
-		(digits(in.IDNumber) != "" && digits(in.IDNumber) != o.CustomerIDNumber)
+		ch(in.Email, o.Email)
 }
 
 // Profit is the economics stored with each order (shown on the approval card).
@@ -235,9 +240,15 @@ type Profit struct {
 	CostConfirmed  bool               `json:"costo_confirmado"`
 	ExpectedUSD    float64            `json:"ganancia_esperada_usd"`
 	ReturnRateUsed float64            `json:"tasa_devolucion_usada"`
+	// Freight used in the numbers and where it came from ("dropi" | "estimado").
+	Freight       int64  `json:"flete"`
+	FreightSource string `json:"fuente_flete"`
+	// Carriers compared for this destination, best first.
+	Carriers       []shipping.Option `json:"transportadoras,omitempty"`
+	CarrierWarning string            `json:"advertencia_transportadora,omitempty"`
 }
 
-func (s *Service) applyZone(o *store.Order, d rules.Decision, p catalog.Product) {
+func (s *Service) applyZone(ctx context.Context, o *store.Order, d rules.Decision, p catalog.Product) {
 	o.Risk = d.Risk
 	o.PaymentPolicy = d.Policy
 	o.AdvanceAmount = d.AdvanceAmount
@@ -246,18 +257,41 @@ func (s *Service) applyZone(o *store.Order, d rules.Decision, p catalog.Product)
 	if len(d.Carriers) > 0 {
 		o.Carrier = d.Carriers[0]
 	}
-	ret := rules.ReturnRateFor(s.neg().Finanzas.TasaDevolucion, d.Risk, d.Policy)
+	n := s.neg()
+	freight, source := p.Freight, shipping.SourceEstimate
+	var options []shipping.Option
+	var warn string
+	if s.Shipping != nil {
+		cmp := s.Shipping.Compare(ctx, shipping.Scenario{
+			Department: o.Department, City: o.City, Price: o.Total, UnitCost: p.UnitCost, Units: o.Units,
+			EstimatedFreight: p.Freight, Risk: d.Risk, Policy: d.Policy, AdvancePaid: d.AdvanceAmount, ZoneCarriers: d.Carriers,
+		})
+		options, warn = cmp.Options, cmp.Warning
+		if cmp.Best != nil {
+			o.Carrier, freight, source = cmp.Best.Carrier, cmp.Best.Freight, cmp.Source
+		}
+	}
+	ret := rules.ReturnRateFor(n.Finanzas.TasaDevolucion, d.Risk, d.Policy)
+	if t, ok := n.Carrier(o.Carrier); ok && t.TasaDevolucion > 0 {
+		ret = rules.ReturnRateFor(t.TasaDevolucion, d.Risk, d.Policy)
+	}
 	pr := rules.Profit(rules.ProfitInput{
-		Price: o.Total, UnitCost: p.UnitCost, Units: o.Units, Freight: p.Freight,
+		Price: o.Total, UnitCost: p.UnitCost, Units: o.Units, Freight: freight,
 		ReturnRate: ret, AdvancePaid: d.AdvanceAmount,
 	})
-	perOrder, _ := rules.MaxCPA(pr.BreakEvenCPA, s.neg().Finanzas.MargenSeguridad, s.neg().Finanzas.TasaConfirmacion)
+	perOrder, _ := rules.MaxCPA(pr.BreakEvenCPA, n.Finanzas.MargenSeguridad, n.Finanzas.TasaConfirmacion)
 	raw, _ := json.Marshal(Profit{
 		Result: pr, TargetCPA: perOrder, CostConfirmed: p.CostConfirmed,
-		ExpectedUSD: rules.COPtoUSD(pr.ExpectedProfit, s.neg().Finanzas.TRM), ReturnRateUsed: ret,
+		ExpectedUSD: rules.COPtoUSD(pr.ExpectedProfit, n.Finanzas.TRM), ReturnRateUsed: ret,
+		Freight: freight, FreightSource: source, Carriers: options, CarrierWarning: warn,
 	})
 	o.ProfitJSON = string(raw)
 }
+
+var emailRe = regexp.MustCompile(`^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}$`)
+
+// ValidEmail is a pragmatic syntax check (the customer types it in a chat).
+func ValidEmail(v string) bool { return emailRe.MatchString(strings.TrimSpace(v)) }
 
 // Missing lists the required fields still empty.
 func Missing(o store.Order) []string {
@@ -269,7 +303,7 @@ func Missing(o store.Order) []string {
 	}
 	add(o.OfferID == "", "oferta (cuántos frascos)")
 	add(o.CustomerName == "", "nombre completo")
-	add(o.CustomerIDNumber == "", "cédula")
+	add(strings.TrimSpace(o.Email) == "", "correo electrónico")
 	add(o.CustomerPhone == "", "celular")
 	add(o.Department == "", "departamento")
 	add(o.City == "", "ciudad o municipio")
@@ -284,8 +318,9 @@ func (s *Service) Summary(o store.Order) string {
 	b.WriteString("📦 *Resumen de tu pedido*\n")
 	fmt.Fprintf(&b, "• %s: %s\n", o.ProductName, o.OfferLabel)
 	fmt.Fprintf(&b, "• Total: $%s (envío gratis)\n", catalog.FormatCOP(o.Total))
-	fmt.Fprintf(&b, "• Nombre: %s · CC %s\n", o.CustomerName, o.CustomerIDNumber)
+	fmt.Fprintf(&b, "• Nombre: %s\n", o.CustomerName)
 	fmt.Fprintf(&b, "• Celular: %s\n", o.CustomerPhone)
+	fmt.Fprintf(&b, "• Correo: %s\n", o.Email)
 	addr := o.Address
 	if o.AddressRefs != "" {
 		addr += " (" + o.AddressRefs + ")"
@@ -707,6 +742,12 @@ func (s *Service) OwnerEdit(ctx context.Context, orderID int64, in DraftInput, r
 	set(&o.Neighborhood, in.Neighborhood)
 	set(&o.Address, in.Address)
 	set(&o.AddressRefs, in.References)
+	if v := strings.TrimSpace(in.Email); v != "" {
+		if !ValidEmail(v) {
+			return o, fmt.Errorf("el correo %q no parece válido", v)
+		}
+		o.Email = v
+	}
 	set(&o.Notes, in.Notes)
 	if o.Department != "" && o.City != "" && o.Total > 0 {
 		d := s.Zones.Decide(rules.Destination{Department: o.Department, City: o.City, Neighborhood: o.Neighborhood}, o.Total)
@@ -716,7 +757,7 @@ func (s *Service) OwnerEdit(ctx context.Context, orderID int64, in DraftInput, r
 			d.AdvanceAmount, d.CODAmount = rules.Advance(p, o.Total)
 			d.Reason = "ajustado manualmente por el dueño"
 		}
-		s.applyZone(&o, d, product)
+		s.applyZone(ctx, &o, d, product)
 		if o.Status == store.OrderPendingApprove && o.AdvanceAmount > 0 && o.PaymentStatus != store.PayConfirmed {
 			o.Status = store.OrderAwaitPayment
 			o.PaymentStatus = store.PayPending

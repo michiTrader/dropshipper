@@ -152,7 +152,7 @@ func TestFlowMedellinCOD(t *testing.T) {
 
 	r.llm.push(
 		call("c1", "guardar_datos_pedido", map[string]string{
-			"oferta_id": "2x", "nombre_completo": "ana maría restrepo", "cedula": "1.036.123.456", "celular": "300 123 4567",
+			"oferta_id": "2x", "nombre_completo": "ana maría restrepo", "email": "ana.restrepo@gmail.com", "celular": "300 123 4567",
 			"departamento": "Antioquia", "ciudad": "Medellín", "barrio": "Laureles", "direccion": "Cra 76 # 33-20 apto 301",
 		}),
 		text("Perfecto Ana, este es tu resumen..."),
@@ -162,7 +162,7 @@ func TestFlowMedellinCOD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.Status != store.OrderDraft || o.PaymentPolicy != rules.PayCOD || o.Total != 149900 || o.CustomerName != "Ana María Restrepo" || o.CustomerIDNumber != "1036123456" || o.CustomerPhone != "3001234567" {
+	if o.Status != store.OrderDraft || o.PaymentPolicy != rules.PayCOD || o.Total != 149900 || o.CustomerName != "Ana María Restrepo" || o.Email != "ana.restrepo@gmail.com" || o.CustomerPhone != "3001234567" {
 		t.Fatalf("draft: %+v", o)
 	}
 	// The tool result must have handed the agent the exact summary to confirm.
@@ -213,7 +213,7 @@ func TestFlowFarZoneAdvance(t *testing.T) {
 
 	r.llm.push(
 		call("c1", "guardar_datos_pedido", map[string]string{
-			"oferta_id": "1x", "nombre_completo": "Juan Pérez", "cedula": "71234567", "celular": "3109876543",
+			"oferta_id": "1x", "nombre_completo": "Juan Pérez", "email": "juan.perez@gmail.com", "celular": "3109876543",
 			"departamento": "Antioquia", "ciudad": "Vigía del Fuerte", "barrio": "Centro", "direccion": "Calle 3 # 4-10",
 		}),
 		text("Resumen..."),
@@ -260,7 +260,7 @@ func TestFlowRedZoneFullAdvance(t *testing.T) {
 	phone := "sim-red"
 	r.llm.push(
 		call("c1", "guardar_datos_pedido", map[string]string{
-			"oferta_id": "3x", "nombre_completo": "Luz Gómez", "cedula": "41000111", "departamento": "Amazonas",
+			"oferta_id": "3x", "nombre_completo": "Luz Gómez", "email": "luz.gomez@gmail.com", "departamento": "Amazonas",
 			"ciudad": "Leticia", "barrio": "Centro", "direccion": "Calle 8 # 10-20",
 		}),
 		text("Resumen"),
@@ -351,7 +351,7 @@ func TestChangeAfterConfirmReturnsToDraft(t *testing.T) {
 	r := newRig(t, manualNegocio())
 	ctx := context.Background()
 	phone := "sim-change"
-	in := sales.DraftInput{OfferID: "1x", Name: "Pedro Ruiz", IDNumber: "98765432", Phone: "3001112233",
+	in := sales.DraftInput{OfferID: "1x", Name: "Pedro Ruiz", Email: "pedro.ruiz@gmail.com", Phone: "3001112233",
 		Department: "Antioquia", City: "Envigado", Neighborhood: "Zúñiga", Address: "Cl 40 Sur # 30-10"}
 	if _, err := r.sv.UpsertDraft(ctx, phone, in); err != nil {
 		t.Fatal(err)

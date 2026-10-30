@@ -340,7 +340,8 @@ function orderKV(o) {
   const addr = [o.address, o.address_refs && '(' + o.address_refs + ')'].filter(Boolean).join(' ');
   return `<dl class="kv">
     <dt>Producto</dt><dd>${esc(o.product_name)} · ${esc(o.offer_label || 'sin oferta')}</dd>
-    <dt>Cliente</dt><dd>${esc(o.customer_name || '-')} · CC ${esc(o.customer_id_number || '-')}</dd>
+    <dt>Cliente</dt><dd>${esc(o.customer_name || '-')}</dd>
+    <dt>Correo</dt><dd>${esc(o.email || '-')}</dd>
     <dt>Celular</dt><dd>${esc(o.customer_phone || '-')}</dd>
     <dt>Dirección</dt><dd>${esc(addr || '-')}</dd>
     <dt>Barrio / ciudad</dt><dd>${esc(o.neighborhood || '-')} · ${esc(o.city || '-')}, ${esc(o.department || '-')}</dd>
@@ -427,7 +428,7 @@ function bindOrderButtons(root, orders) {
 
 function dropiText(o) {
   return [
-    `Nombre: ${o.customer_name}`, `Cédula: ${o.customer_id_number}`, `Celular: ${o.customer_phone}`,
+    `Nombre: ${o.customer_name}`, `Correo: ${o.email || ''}`, `Celular: ${o.customer_phone}`,
     `Departamento: ${o.department}`, `Ciudad: ${o.city}`, `Barrio: ${o.neighborhood}`,
     `Dirección: ${o.address}`, o.address_refs ? `Referencias: ${o.address_refs}` : '',
     `Producto: ${o.product_name} x${o.units} (${o.offer_label})`, `Total: ${o.total}`,
@@ -461,7 +462,7 @@ async function openEditOrder(o) {
     <form id="editForm">
       <label class="field"><span>Oferta</span><select name="oferta_id">${offers.map((x) => `<option value="${esc(x.id)}" ${x.id === o.offer_id ? 'selected' : ''}>${esc(x.etiqueta)} · ${cop(x.precio)}</option>`).join('')}</select></label>
       <div class="fgrid">
-      ${fld('nombre_completo', 'Nombre', o.customer_name)}${fld('cedula', 'Cédula', o.customer_id_number)}${fld('celular', 'Celular', o.customer_phone)}
+      ${fld('nombre_completo', 'Nombre', o.customer_name)}${fld('email', 'Correo', o.email)}${fld('celular', 'Celular', o.customer_phone)}
       ${fld('departamento', 'Departamento', o.department)}${fld('ciudad', 'Ciudad', o.city)}${fld('barrio', 'Barrio', o.neighborhood)}
       ${fld('direccion', 'Dirección', o.address, { full: true })}${fld('referencias', 'Referencias', o.address_refs)}${fld('notas', 'Notas', o.notes)}
       </div>
