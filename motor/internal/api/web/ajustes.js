@@ -39,24 +39,23 @@ async function renderAjustes() {
           ${fld('whatsapp_dueno', 'Tu WhatsApp para avisos (opcional)', nt.whatsapp_dueno, { ph: '573001234567', help: 'Recibes avisos de pedidos nuevos y de clientes que piden una persona. Solo llega si escribiste al número del negocio en las últimas 24 h.' })}
         </div></div>
 
-      <div class="card" style="margin-top:16px"><div class="card-head"><span class="ico">${ic('message', 18)}</span><div><h3>Ritmo de la conversación</h3><div class="desc">Hace que la IA se sienta natural: espera a que el cliente termine de escribir y responde en varios mensajes cortos.</div></div></div>
+      <div class="card" style="margin-top:16px"><div class="card-head"><span class="ico">${ic('message', 18)}</span><div><h3>Ritmo de la conversación</h3><div class="desc">Hace que la IA se sienta natural: deja que el cliente termine de escribir y responde en varios mensajes cortos.</div></div></div>
         <div class="fgrid c3">
-          <label class="field"><span>Espera para agrupar mensajes (seg)</span><input name="espera_agrupar_seg" type="number" min="0" max="60" value="${c.espera_agrupar_seg ?? 6}"></label>
+          <label class="field"><span>Espera antes de responder (segundos)</span><input name="espera_agrupar_seg" type="number" min="0" max="600" value="${c.espera_agrupar_seg ?? 60}"><small>La IA espera este tiempo desde el último mensaje del cliente, por si escribe en varios mensajes seguidos. Por defecto 60 (1 minuto); 0 responde de inmediato.</small></label>
           <label class="field"><span>Pausa entre mensajes (ms)</span><input name="pausa_entre_mensajes_ms" type="number" min="0" step="100" value="${c.pausa_entre_mensajes_ms ?? 1200}"></label>
           <label class="field"><span>Mensajes que la IA recuerda</span><input name="historial_maximo" type="number" min="4" max="200" value="${c.historial_maximo ?? 40}"></label>
         </div></div>
 
       <div class="form-actions" style="position:sticky;bottom:0;background:var(--bg);padding:12px 0;margin-top:8px"><span class="spacer"></span><button class="btn primary" type="submit">Guardar ajustes</button></div>
     </form>
-    ${termBlock('Hacerlo desde la terminal', `motor negocio ver
-motor negocio poner persona.nombre Sofia
-motor negocio poner finanzas.tasa_devolucion 25%
-motor negocio poner autonomia.auto_aprobar_pedidos true
-motor negocio poner conversacion.espera_agrupar_seg 6`)}
+    <div class="card" style="margin-top:16px"><div class="card-head"><span class="ico">${ic('sun', 18)}</span><div><h3>Apariencia</h3><div class="desc">Elige el tema del panel. Se recuerda en este dispositivo.</div></div></div>
+      <div class="themes" id="themeOpts">${[['light', 'Claro', 'Fondo blanco, ideal de día', 'sun'], ['dark', 'Oscuro', 'Descansa la vista de noche', 'moon'], ['auto', 'Automático', 'Sigue el tema de tu equipo', 'monitor']]
+        .map(([k, t, d2, i]) => `<button type="button" class="themeopt ${Theme.mode() === k ? 'sel' : ''}" data-theme="${k}">${ic(i, 20)}<div><b>${t}</b><span>${d2}</span></div></button>`).join('')}</div></div>
     <div class="card" style="margin-top:16px"><h3>Sesión</h3>
       <div class="small muted" style="margin-bottom:10px">Motor v${esc(S.status ? S.status.version : '')} · iniciado ${fmtTime(S.status && S.status.iniciado)}</div>
       <button class="btn" id="logout">Cerrar sesión en este dispositivo</button></div>`;
 
+  $('#themeOpts').onclick = (e) => { const b = e.target.closest('[data-theme]'); if (!b) return; Theme.set(b.dataset.theme); $$('#themeOpts .themeopt').forEach((x) => x.classList.toggle('sel', x === b)); };
   $('#logout').onclick = () => { localStorage.removeItem('ds_token'); S.token = ''; location.reload(); };
   $('#ajForm').onsubmit = async (e) => {
     e.preventDefault();
@@ -73,6 +72,7 @@ motor negocio poner conversacion.espera_agrupar_seg 6`)}
       try { await put('/api/ajustes/negocio', body); toast('Ajustes guardados.'); refreshBadges(); } catch (err) { toast(err.message, true); }
     });
   };
+
 }
 
 Object.assign(window, { renderAjustes });

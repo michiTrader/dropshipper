@@ -226,3 +226,111 @@ func mustJSON(t *testing.T, v any) string {
 	}
 	return string(b)
 }
+
+func TestHealAutofillClearsPanelTokenInWhatsApp(t *testing.T) {
+	m, _ := open(t)
+	ctx := context.Background()
+	tok := NewToken()
+	_ = m.Update(ctx, func(s *Settings) error { s.General.AdminToken = tok; return nil })
+	// Simulate a stale value written by the browser's password manager.
+	raw := mustJSON(t, config.WhatsAppConfig{Token: tok, VerifyToken: tok, AppSecret: tok, PhoneNumberID: "123"})
+	if err := m.st.SetSetting(ctx, keyWhatsApp, raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := m.Get().WhatsApp
+	if w.Token != "" || w.VerifyToken != "" || w.AppSecret != "" || w.PhoneNumberID != "123" {
+		t.Fatalf("autofill not healed: %+v", w)
+	}
+}
+
+func TestValidateRejectsWhatsAppTokenEqualToPanelToken(t *testing.T) {
+	s := Seed(newCfg())
+	s.General.AdminToken = NewToken()
+	s.WhatsApp.Token = s.General.AdminToken
+	if err := s.Validate(); err == nil {
+		t.Fatal("a WhatsApp token equal to the panel token must be rejected")
+	}
+}
+
+func TestWaitDefaultsToOneMinuteAndMigratesOnce(t *testing.T) {
+	st, err := store.OpenPath(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	seed := func() Settings {
+		s := Seed(newCfg())
+		s.Negocio.Conversacion.EsperaAgruparSeg = 6
+		return s
+	}
+	m, err := Open(ctx, st, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Get().Negocio.Conversacion.EsperaAgruparSeg; got != 60 {
+		t.Fatalf("old 6 s must migrate to 60, got %d", got)
+	}
+	// The owner lowers it: it must stay (migration runs only once).
+	_ = m.Update(ctx, func(s *Settings) error { s.Negocio.Conversacion.EsperaAgruparSeg = 20; return nil })
+	m2, err := Open(ctx, st, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m2.Get().Negocio.Conversacion.EsperaAgruparSeg; got != 20 {
+		t.Fatalf("owner value overwritten: %d", got)
+	}
+}
+
+// A browser password manager once pasted the panel token into the WhatsApp
+// token field. It is never a real credential: refuse it and heal old data.
+func TestWhatsAppSecretEqualToPanelTokenIsRejectedAndHealed(t *testing.T) {
+	m, st := open(t)
+	ctx := context.Background()
+	if err := m.Update(ctx, func(s *Settings) error { s.General.AdminToken = "token-del-panel-1234"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	err := m.Update(ctx, func(s *Settings) error { s.WhatsApp.Token = "token-del-panel-1234"; return nil })
+	if err == nil || !strings.Contains(err.Error(), "token de acceso del panel") {
+		t.Fatalf("debía rechazar el token repetido, err=%v", err)
+	}
+	if m.Get().WhatsApp.Token != "" {
+		t.Fatal("el token repetido se guardó")
+	}
+	// Data saved by an older version is cleaned on load.
+	raw, _ := json.Marshal(config.WhatsAppConfig{Token: "token-del-panel-1234", GraphVersion: "v21.0"})
+	if err := st.SetSetting(ctx, keyWhatsApp, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Get().WhatsApp.Token; got != "" {
+		t.Fatalf("no se limpió el token heredado: %q", got)
+	}
+	if m.Get().Public("").WhatsApp.Token.Set {
+		t.Fatal("el panel no debe mostrar un token de WhatsApp que nadie puso")
+	}
+}
+
+func TestWaitBeforeAnsweringDefaultsToOneMinute(t *testing.T) {
+	m, _ := open(t)
+	if got := m.Get().Negocio.Conversacion.EsperaAgruparSeg; got != 60 {
+		t.Fatalf("la espera por defecto es %d s, debía ser 60", got)
+	}
+	var n config.Negocio
+	n.ApplyDefaults()
+	if n.Conversacion.AgruparDuration() != time.Minute {
+		t.Fatalf("AgruparDuration=%v", n.Conversacion.AgruparDuration())
+	}
+	// The owner can change it, and 0 (no wait) is allowed.
+	if err := m.Update(context.Background(), func(s *Settings) error { s.Negocio.Conversacion.EsperaAgruparSeg = 90; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if m.Get().Negocio.Conversacion.AgruparDuration() != 90*time.Second {
+		t.Fatal("no respetó el valor configurado")
+	}
+}

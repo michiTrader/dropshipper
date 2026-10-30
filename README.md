@@ -13,37 +13,24 @@ El **Motor** (`motor/`) es un solo programa en Go que:
 - permite **tomar el control** de cualquier chat y registra **por que** la IA hizo cada cosa;
 - trae un **panel web** (escritorio y celular, instalable) y un **simulador** para probar sin WhatsApp.
 
-## Todo se conecta desde el panel o desde la terminal
+## Todo se configura desde el panel
 
-Las dos vias editan **los mismos datos** (base de datos del Motor). Un Motor encendido ve los cambios hechos
-desde la terminal en pocos segundos, sin reiniciar. No hace falta editar archivos ni variables de entorno.
+Solo tienes que encender el Motor y abrir el panel: **Dropi, IA, WhatsApp, cobros, transportadoras, simulacion de envios, costos y tema claro/oscuro se configuran desde la interfaz**, sin reiniciar y sin tocar la terminal. Los comandos `motor ...` siguen existiendo (opcionales, para administradores) y editan los mismos datos.
 
 ```bash
 cd motor
 go run ./cmd/motor            # enciende el Motor: abre http://localhost:8080
 ```
 
-En el panel: **Conexiones** (IA, WhatsApp, cobros, seguridad, cada una con boton de prueba),
-**Productos** (lista, detalle y finanzas por producto) y **Ajustes** (persona de la IA, autonomia,
-supuestos financieros). Cada bloque trae un desplegable "Hacerlo desde la terminal" con los comandos equivalentes.
+En el panel: **Conexiones** (IA, **Dropi**, WhatsApp, cobros, seguridad, cada una con boton de prueba),
+**Envios** (transportadoras con notas para la IA, cotizador de fletes y simulacion de pedido en Dropi, que no crea nada),
+**Productos** (lista, detalle, finanzas y boton "Traer costos de Dropi") y **Ajustes** (persona de la IA, autonomia,
+supuestos financieros, espera antes de responder -60 s por defecto- y apariencia clara/oscura/automatica).
 
-Desde la terminal (`go build -o motor ./cmd/motor` y luego `./motor ...`):
-
-```bash
-motor estado                                   # que esta conectado y que falta
-echo $CLAVE | motor ia agregar --preset deepseek --clave - --activar
-motor ia probar                                # llamada real de prueba
-motor ia agregar --nombre Arxi --url https://tu-arxi/v1 --modelo mi-modelo --clave - --activar   # la URL suele terminar en /v1
-echo $TOKEN | motor whatsapp configurar --token - --telefono-id 123456789 --verify-token mi-texto
-motor token generar                            # acceso al panel desde otros equipos
-motor negocio poner finanzas.tasa_devolucion 25%
-motor productos agregar --sku MI-PROD --nombre "Mi producto" --costo 20000 --flete 14000 --oferta x1:1:79900
-motor ayuda                                    # lista completa
-```
+Para administradores que prefieran automatizar, el mismo programa trae comandos opcionales (`motor ayuda`) que editan los mismos datos. No son necesarios.
 
 **Seguridad:** mientras no exista un token, el panel solo abre desde el mismo computador. Los secretos nunca
-vuelven al navegador (se muestran enmascarados) y, desde la terminal, se leen por entrada estandar (`--clave -`)
-para que no queden en el historial.
+vuelven al navegador (se muestran enmascarados).
 
 Guia paso a paso (WhatsApp, Bre-B, Dropi): [`docs/CONFIGURACION.md`](docs/CONFIGURACION.md)
 Propuesta completa: [`docs/PROPUESTA.md`](docs/PROPUESTA.md)

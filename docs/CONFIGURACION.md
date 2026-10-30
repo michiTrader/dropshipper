@@ -3,15 +3,13 @@
 Esta guia te lleva de cero a tener la vendedora IA atendiendo tu WhatsApp y dejando los pedidos listos para que
 tu los apruebes.
 
-**Todo se puede hacer de dos maneras, y las dos editan los mismos datos:**
+**Solo necesitas encender el Motor. Todo lo demas se hace desde el panel web** (`http://localhost:8080`):
+conexiones (IA, WhatsApp, Dropi, cobros), productos, transportadoras, pruebas y ajustes. Cada conexion trae un
+boton **Probar conexion** y mensajes de error claros. No hay que escribir comandos ni editar archivos.
 
-- **Panel web** (`http://localhost:8080`): formularios guiados con boton de **Probar conexion** y mensajes de error claros.
-- **Terminal** (`motor ...`): los mismos ajustes como comandos. Cada bloque del panel trae un desplegable
-  **"Hacerlo desde la terminal"** con el comando equivalente.
-
-Los datos viven en la base de datos del Motor (`data/`). Si el Motor esta encendido y cambias algo desde la
-terminal, lo ve en pocos segundos, sin reiniciar. El archivo `.env` es **opcional**: solo siembra valores en el
-primer arranque (util para servidores sin nadie que abra el panel).
+Los datos viven en la base de datos del Motor (`data/`) y los cambios se aplican al instante, sin reiniciar.
+El archivo `.env` es **opcional**: solo siembra valores en el primer arranque (util para servidores sin nadie que
+abra el panel).
 
 ---
 
@@ -33,15 +31,9 @@ primer arranque (util para servidores sin nadie que abra el panel).
    ```
 5. Abre **http://localhost:8080**. Veras **Inicio** con una lista de **puesta en marcha** que te dice que falta.
 
-Para ver el mismo resumen desde la terminal:
-
-```bash
-./motor estado
-```
-
 > **Seguridad por defecto.** Mientras no exista un token de acceso, el panel solo abre desde el mismo computador
 > donde corre el Motor. Cualquier otro equipo recibe "acceso restringido". Cuando quieras entrar desde el celular o
-> publicar el Motor en internet, crea un token (seccion 6).
+> publicar el Motor en internet, crea un token desde el panel (seccion 6).
 
 ---
 
@@ -62,22 +54,10 @@ el modelo y la clave.
 
 Puedes tener varios proveedores guardados y cambiar el que esta en uso con un clic.
 
-**Desde la terminal:**
-
-```bash
-motor ia presets                                             # proveedores conocidos
-echo $MI_CLAVE | motor ia agregar --preset deepseek --clave - --activar
-motor ia agregar --nombre Arxi --url https://tu-arxi/v1 --modelo mi-modelo --clave - --activar   # la URL suele terminar en /v1
-motor ia modelos                                             # modelos disponibles
-motor ia probar                                              # llamada real de prueba
-motor ia listar | activar ID | quitar ID
-```
-
 **Sobre la URL:** debe ser la direccion base de una API compatible con OpenAI, normalmente terminada en `/v1` (por ejemplo `https://api.ejemplo.com/v1`). Si pegas solo el dominio (`https://api.ejemplo.com`) y el proveedor responde "Route ... not found" (404), el Motor reintenta solo con `/v1`, recuerda la que funciona y, al probar la conexion, te sugiere guardar la direccion corregida. No incluyas `/chat/completions`.
 
 Si la IA falla al responder, el Motor crea una alerta con la causa en espanol (clave rechazada, sin saldo, URL incorrecta, modelo inexistente...) y deja el chat para que respondas tu.
 
-El guion en `--clave -` lee la clave de la entrada estandar, para que no quede en el historial de la terminal.
 La clave nunca se vuelve a mostrar completa: el panel solo muestra los ultimos 4 caracteres, y al editar un
 proveedor, dejar el campo vacio conserva la clave guardada.
 
@@ -101,19 +81,6 @@ Un producto con pedidos no se puede borrar (desactivalo), y siempre debe quedar 
 
 La **Guia de ventas** (boton en la lista) son las instrucciones generales de la IA para todos los productos.
 
-**Desde la terminal:**
-
-```bash
-motor productos listar
-motor productos agregar --sku CREMA-50 --nombre "Crema 50ml" --costo 20000 --flete 14000 \
-      --oferta x1:1:79900 --oferta x2:2:129900
-motor productos editar CREMA-50 --costo 21000 --costo-confirmado=true
-motor productos exportar CREMA-50 > crema.yaml      # editar la ficha completa en un archivo
-motor productos importar crema.yaml
-motor productos activar CREMA-50
-motor guia ver > guia.md  &&  motor guia poner guia.md
-```
-
 ---
 
 ## 4. Datos para cobrar anticipos
@@ -128,18 +95,6 @@ En zonas de riesgo el cliente paga un anticipo antes del despacho.
 - **Wompi** (opcional): confirmacion automatica, sin revisar capturas. Abre una cuenta en
   <https://comercios.wompi.co>, copia tus llaves en el bloque **Wompi** y pulsa **Probar conexion**.
   En Wompi, registra la **URL de eventos** que muestra el panel. Wompi cobra comision por transaccion.
-
-**Desde la terminal:**
-
-```bash
-motor negocio poner pagos.metodo manual
-motor negocio poner pagos.manual.llave_bre_b 3001234567
-motor negocio poner pagos.manual.banco Bancolombia
-
-echo $WOMPI_PRIVADA | motor wompi configurar --llave-publica pub_test_xxx --llave-privada - --eventos SECRETO --pruebas
-motor wompi probar
-motor negocio poner pagos.metodo wompi
-```
 
 ---
 
@@ -157,11 +112,7 @@ cloudflared tunnel --url http://localhost:8080
 ```
 
 Te da una URL como `https://algo.trycloudflare.com` (cambia cada vez que reinicias el tunel; para algo estable usa
-un tunel con nombre o un servidor). Guardala en **Conexiones > Seguridad y acceso > Direccion publica**, o:
-
-```bash
-motor url https://algo.trycloudflare.com
-```
+un tunel con nombre o un servidor). Guardala en **Conexiones > Seguridad y acceso > Direccion publica**.
 
 Con ella, el panel te muestra las direcciones exactas de los webhooks para copiar:
 `.../webhook/whatsapp` y `.../webhook/wompi`.
@@ -180,14 +131,6 @@ Con ella, el panel te muestra las direcciones exactas de los webhooks para copia
 
 **En el panel:** Conexiones > **WhatsApp Business**. Completa el token, el ID del numero y el secreto de la app.
 En **Token de verificacion** pulsa **Generar** (o inventa uno). Pulsa **Probar conexion** y luego **Guardar**.
-
-**Desde la terminal:**
-
-```bash
-echo $WA_TOKEN | motor whatsapp configurar --token - --telefono-id 123456789 --verify-token mi-texto-secreto
-echo $WA_SECRET | motor whatsapp configurar --app-secret -
-motor whatsapp probar
-```
 
 ### 5.4 Registrar el webhook en Meta
 
@@ -209,14 +152,6 @@ No necesitas reiniciar el Motor en ningun paso.
 **En el panel:** Conexiones > **Seguridad y acceso** > **Generar token de acceso**. El token se muestra una sola vez:
 guardalo. Este navegador ya queda con la sesion iniciada; en otros dispositivos pega el token en la pantalla de acceso.
 
-**Desde la terminal:**
-
-```bash
-motor token generar        # crea un token y lo muestra una sola vez
-motor token poner MI_TOKEN_LARGO    # minimo 8 caracteres
-motor token quitar         # el panel vuelve a abrir solo desde este computador
-```
-
 Antes de publicar el Motor en internet, **define siempre un token**.
 
 ---
@@ -230,9 +165,12 @@ Antes de publicar el Motor en internet, **define siempre un token**.
 | **Conversaciones** | Ver los chats en vivo. **Tomar el chat** pausa la IA; **Que hizo la IA** muestra cada decision |
 | **Pedidos** | Historial y cambio de estado (en transito, entregado, novedad, devuelto) |
 | **Simulador** | Probar la vendedora sin usar WhatsApp |
-| **Productos** | Lista de productos; ficha, ofertas y finanzas de cada uno; consulta de zonas de envio |
-| **Conexiones** | IA, WhatsApp, cobros y seguridad, con pruebas de conexion |
-| **Ajustes** | Persona de la IA, autonomia, supuestos financieros, Dropi y avisos |
+| **Productos** | Lista de productos; ficha, ofertas y finanzas de cada uno; consulta de zonas de envio; boton **Traer costos de Dropi** |
+| **Envios** | Transportadoras (con notas para la IA), **cotizador** de fletes y **simulacion de pedido en Dropi** |
+| **Conexiones** | IA, **Dropi**, WhatsApp, cobros y seguridad, con pruebas de conexion |
+| **Ajustes** | Persona de la IA, autonomia, supuestos financieros, ritmo de la conversacion y avisos |
+
+El boton **Tema** (abajo a la izquierda) alterna entre claro, oscuro y automatico (sigue al sistema); se recuerda en cada navegador.
 
 **Flujo de un pedido (Dropi todavia es manual):**
 1. La vendedora conversa, toma los datos y el cliente confirma el resumen.
@@ -246,14 +184,23 @@ panel, la IA tambien se pausa en ese chat; para devolverlo usa **Devolver a la I
 
 ### Ajustes del negocio
 
-En **Ajustes** (o con `motor negocio poner CLAVE VALOR`) cambias, sin reiniciar:
+En **Ajustes** cambias, sin reiniciar:
 
-- **Persona**: nombre, rol y tono de la vendedora. `motor negocio poner persona.nombre Valeria`
+- **Persona**: nombre, rol y tono de la vendedora.
 - **Autonomia**: si la IA aprueba sola los pedidos de bajo riesgo y con que limites. Por defecto, tu apruebas todo.
 - **Supuestos financieros** (en %): devoluciones esperadas, pedidos que se confirman y margen de seguridad.
-  `motor negocio poner finanzas.tasa_devolucion 25%`
-- **Conversacion**: tiempo para agrupar mensajes, pausa entre mensajes y memoria.
-- **Dropi y avisos**: modo manual o por API, y tu WhatsApp para recibir avisos.
+- **Conversacion**: la IA espera **60 segundos** (1 minuto) desde el ultimo mensaje del cliente antes de contestar,
+  para que pueda escribir varios mensajes seguidos y recibir una sola respuesta. Puedes cambiar ese tiempo
+  (0 = responde enseguida), la pausa entre mensajes y la memoria.
+- **Avisos**: tu WhatsApp para recibir avisos de pedidos nuevos.
+
+### Que hace la IA con los datos del cliente y los pedidos
+
+- **Revisa el formato**: si el cliente escribe un correo como `samuelarrobagmail.com`, o un celular, nombre o ciudad
+  dudosos, la IA **no los guarda tal cual**: le pregunta si quiso decir `samuel@gmail.com` y espera su confirmacion.
+- **No duplica pedidos**: si el cliente ya tiene un pedido aprobado o en camino y vuelve a escribir "si" o "mandame la
+  guia", la IA le explica el estado (por ejemplo, que la guia llega cuando tu la registres). Solo crea un segundo
+  pedido cuando el cliente confirma de forma explicita que quiere **otro**.
 
 ---
 
@@ -283,37 +230,56 @@ reinicia el Motor. Para comprobar que haria el Motor con un destino, usa **Produ
 
 ## Dropi y transportadoras
 
-**Conectar Dropi** (Conexiones por API o terminal; ambas editan los mismos datos):
+Todo esto se hace desde el panel; no hay que usar la terminal.
 
-```
-echo $TOKEN_DROPI | motor dropi configurar --token - --ciudad-origen Medellin --produccion
-motor dropi probar
-```
+### Conectar Dropi
 
-- El token se crea en Dropi > Configuración > Integraciones.
-- El entorno de pruebas (`--pruebas`) NO tiene transportadoras: sirve para validar el token, no para cotizar fletes.
-- Cada producto necesita su "ID de Dropi" para traer el costo real (`motor dropi costos SKU`), que lo marca como confirmado.
+1. En Dropi entra a **Configuracion > Integraciones**, crea una integracion y copia el **token**.
+2. En el panel abre **Conexiones > Dropi** (es la tarjeta debajo de Inteligencia artificial).
+3. Pega el token y escribe el **departamento y la ciudad de origen** (desde donde sale tu mercancia).
+4. Deja **sin marcar** el entorno de pruebas: el de pruebas de Dropi **no tiene transportadoras**, sirve solo para
+   validar el token pero no para cotizar fletes.
+5. Pulsa **Probar conexion** y luego **Guardar Dropi**. Con la conexion lista puedes activar
+   **Crear los pedidos aprobados directamente en Dropi**; si lo dejas apagado, el Motor te entrega los datos para
+   copiar y tu registras la guia a mano.
 
-**"Costo sin confirmar"**: el producto tiene un costo estimado. Se confirma cuando lo marcas como confirmado o cuando usas `motor dropi costos SKU`. Conectar Dropi por sí solo no lo confirma.
+Para desconectar, pulsa **Desconectar** en la misma tarjeta. Los fletes vuelven a ser los estimados.
 
-**Transportadoras** (Veloces, Envía, Interrapidísimo, Domina, Coordinadora, 99minutos, TCC, Wiilog, Jamv-drive, Derocha-express):
+### Costos de los productos y "Costo sin confirmar"
 
-```
-motor transportadoras ver
-motor transportadoras notas veloces "Buena en Medellin; no recibe contraentrega"
-motor transportadoras tasa envia 18%
-motor transportadoras desactivar tcc
-```
+Un producto muestra **Costo sin confirmar** cuando su costo lo escribiste tu como estimado. Se confirma de dos formas:
 
-Las notas se inyectan en el prompt de la IA. El Motor compara las activas con la fórmula de ganancia (ganancia si entrega, pérdida si devuelve, ganancia esperada) y elige la de mayor ganancia esperada.
+- Marcando **Costo confirmado** en **Productos > Ofertas y costos**, o
+- Escribiendo el **ID de Dropi** del producto y pulsando **Traer costos de Dropi** (copia el costo real y lo marca
+  como confirmado).
 
-**Simular un pedido sin crear nada en Dropi**:
+Conectar Dropi por si solo **no** confirma los costos.
 
-```
-motor dropi cotizar  --ciudad Bogota --producto SKU
-motor dropi simular  --ciudad Bogota --producto SKU
-```
+### Transportadoras
 
-Verifica conexión, flete cotizado frente al estimado, costo frente al de Dropi, costo confirmado, rentabilidad y código DANE, y muestra el pedido que se enviaría (no se envía).
+En **Envios > Transportadoras** estan las diez disponibles en Dropi Colombia: Veloces, Envia, Interrapidisimo,
+Domina, Coordinadora, 99minutos, TCC, Wiilog, Jamv-drive y Derocha-express. Para cada una puedes:
 
-**Datos del cliente**: la IA pide correo electrónico, no cédula.
+- **Activarla o apagarla**: el Motor solo cotiza las activas.
+- Escribir **notas para la IA** (cobertura, tiempos, si recoge efectivo, experiencias): la IA las lee al conversar.
+- Indicar su **tasa de devolucion** propia (0 = usa la general) y su **prioridad** (la menor gana si empatan).
+
+El Motor compara las activas con la formula de ganancia (**ganancia si entrega**, **perdida si devuelve** y
+**ganancia esperada**) y elige la de mayor ganancia esperada. En **Aprobaciones** cada pedido muestra la
+transportadora elegida, si el flete es real de Dropi o estimado, y la comparacion con las demas.
+
+### Probar sin crear nada en Dropi
+
+En **Envios > Cotizar y simular un pedido** elige un producto, una oferta y un destino:
+
+- **Cotizar** compara las transportadoras.
+- **Simular pedido en Dropi** ademas verifica la conexion, el flete cotizado frente al estimado, el costo frente al
+  de Dropi, si el costo esta confirmado, la rentabilidad y el codigo DANE del municipio, y muestra el pedido que se
+  enviaria. **Nunca crea nada en Dropi.**
+
+> Nota: las respuestas de la API de Dropi se interpretan de forma tolerante, pero no se han verificado contra una
+> cuenta real. Si algun dato no aparece, la simulacion lo marca como aviso en lugar de fallar.
+
+### Datos del cliente
+
+La IA pide **correo electronico**, no cedula.

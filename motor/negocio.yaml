@@ -33,7 +33,7 @@ autonomia:
   auto_solo_riesgo_normal: true
 
 conversacion:
-  espera_agrupar_seg: 4        # espera tras el último mensaje del cliente antes de responder
+  espera_agrupar_seg: 60       # segundos de espera tras el último mensaje del cliente (1 minuto)
   pausa_entre_mensajes_ms: 1200
   historial_maximo: 40
 

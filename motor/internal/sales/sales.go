@@ -19,6 +19,7 @@ import (
 
 	"github.com/michiTrader/dropshipper/motor/internal/catalog"
 	"github.com/michiTrader/dropshipper/motor/internal/config"
+	"github.com/michiTrader/dropshipper/motor/internal/geo"
 	"github.com/michiTrader/dropshipper/motor/internal/rules"
 	"github.com/michiTrader/dropshipper/motor/internal/shipping"
 	"github.com/michiTrader/dropshipper/motor/internal/store"
@@ -76,10 +77,16 @@ type DraftInput struct {
 	References   string `json:"referencias"`
 	Email        string `json:"email"`
 	Notes        string `json:"notas"`
+	// NewOrder: the customer explicitly confirmed they want ANOTHER order while
+	// a previous one is still on its way. Without it no second order is made.
+	NewOrder bool `json:"nuevo_pedido,omitempty"`
 }
 
 // DraftResult tells the agent what is still missing and what the order looks like.
 type DraftResult struct {
+	// ExistingOrder is true when nothing was created because the customer
+	// already has an order in flight (see UpsertDraft).
+	ExistingOrder  bool            `json:"pedido_existente,omitempty"`
 	OrderID        int64           `json:"pedido_id"`
 	Status         string          `json:"estado"`
 	Missing        []string        `json:"faltan"`
@@ -101,6 +108,18 @@ func (s *Service) UpsertDraft(ctx context.Context, phone string, in DraftInput) 
 
 	o, err := s.Store.OpenOrderFor(ctx, phone)
 	if errors.Is(err, store.ErrNotFound) {
+		// A customer who already has an order on its way and says "sí" again
+		// is almost always asking about THAT order: never open a second one
+		// unless they explicitly asked for it.
+		if !in.NewOrder {
+			if prev, ok := s.inFlight(ctx, phone); ok {
+				return DraftResult{
+					OrderID: prev.ID, Status: prev.Status, ExistingOrder: true,
+					Instruction: "NO se creó ningún pedido nuevo: el cliente ya tiene el pedido #" + fmt.Sprint(prev.ID) + ". " + StatusNote(prev) +
+						" Díselo con calidez y explícale que debe esperar la guía (no prometas fecha exacta). Si el cliente quiere comprar OTRA vez, pregúntale de forma explícita si desea un segundo pedido además del anterior; solo si lo confirma, vuelve a llamar guardar_datos_pedido con nuevo_pedido=true.",
+				}, nil
+			}
+		}
 		p := s.productFor(in.ProductSKU)
 		o = store.Order{Phone: phone, Status: store.OrderDraft, ProductSKU: p.SKU, ProductName: p.Name}
 	} else if err != nil {
@@ -150,16 +169,27 @@ func (s *Service) UpsertDraft(ctx context.Context, phone string, in DraftInput) 
 	if v := digits(in.IDNumber); v != "" {
 		o.CustomerIDNumber = v // only if the customer volunteers it
 	}
-	if v := strings.TrimSpace(in.Email); v != "" && !ValidEmail(v) {
-		warnings = append(warnings, "el correo no parece válido; pídeselo de nuevo con calma (ej: nombre@gmail.com)")
-		in.Email = ""
-	}
-	if v := strings.TrimSpace(in.Phone); v != "" {
-		norm, ok := NormalizeCOPhone(v)
-		if !ok {
-			warnings = append(warnings, "el celular no parece un móvil colombiano válido (10 dígitos que empiezan por 3); confírmalo")
+	if v := strings.TrimSpace(in.Email); v != "" {
+		if sug, bad := EmailProblem(v); bad {
+			if sug != "" {
+				warnings = append(warnings, fmt.Sprintf("el correo %q parece mal escrito; NO lo guardé. Pregúntale al cliente si quiso decir %q y guárdalo solo cuando lo confirme", v, sug))
+			} else {
+				warnings = append(warnings, fmt.Sprintf("el correo %q no parece válido; NO lo guardé. Pídele que lo escriba de nuevo con calma (ej: nombre@gmail.com)", v))
+			}
+			in.Email = ""
 		}
-		o.CustomerPhone = norm
+	}
+	phoneAsked := strings.TrimSpace(in.Phone) != ""
+	if phoneAsked {
+		norm, ok := NormalizeCOPhone(in.Phone)
+		if !ok {
+			warnings = append(warnings, fmt.Sprintf("el celular %q no parece un móvil colombiano (10 dígitos que empiezan por 3); NO lo guardé. Pídeselo de nuevo", strings.TrimSpace(in.Phone)))
+		} else {
+			o.CustomerPhone = norm
+		}
+	}
+	if v := strings.TrimSpace(in.Name); v != "" && len(strings.Fields(v)) < 2 {
+		warnings = append(warnings, "el nombre tiene una sola palabra; pide nombre y apellido para la guía de envío")
 	}
 	set(&o.Department, in.Department)
 	set(&o.City, in.City)
@@ -168,10 +198,15 @@ func (s *Service) UpsertDraft(ctx context.Context, phone string, in DraftInput) 
 	set(&o.AddressRefs, in.References)
 	set(&o.Email, in.Email)
 	set(&o.Notes, in.Notes)
-	if o.CustomerPhone == "" {
+	if o.CustomerPhone == "" && !phoneAsked {
 		// The WhatsApp number is a valid default contact phone.
 		if norm, ok := NormalizeCOPhone(phone); ok {
 			o.CustomerPhone = norm
+		}
+	}
+	if strings.TrimSpace(in.City) != "" {
+		if _, ok := geo.Find(o.Department, in.City); !ok {
+			warnings = append(warnings, fmt.Sprintf("no reconozco la ciudad o municipio %q; confirma con el cliente cómo se escribe (y su departamento)", strings.TrimSpace(in.City)))
 		}
 	}
 	if o.Address != "" && !looksLikeAddress(o.Address) {
@@ -842,4 +877,94 @@ func titleCase(s string) string {
 		words[i] = string(r)
 	}
 	return strings.Join(words, " ")
+}
+
+// inFlight returns the customer's latest order if it was already approved and
+// has not been delivered or closed yet.
+func (s *Service) inFlight(ctx context.Context, phone string) (store.Order, bool) {
+	orders, err := s.Store.OrdersFor(ctx, phone)
+	if err != nil || len(orders) == 0 {
+		return store.Order{}, false
+	}
+	switch o := orders[0]; o.Status {
+	case store.OrderApproved, store.OrderInDropi, store.OrderInTransit, store.OrderIssue:
+		return o, true
+	}
+	return store.Order{}, false
+}
+
+// StatusNote explains, in plain words for the AI, where an order is and what
+// may (not) be promised about it.
+func StatusNote(o store.Order) string {
+	g := ""
+	if o.TrackingNumber != "" {
+		g = fmt.Sprintf(" Guía %s (%s).", o.TrackingNumber, o.Carrier)
+	}
+	switch o.Status {
+	case store.OrderPendingApprove:
+		return "Está confirmado y en revisión del equipo; todavía no tiene guía."
+	case store.OrderAwaitPayment:
+		return "Está esperando el pago del anticipo."
+	case store.OrderApproved:
+		return "Ya fue aprobado y se está preparando el despacho; la guía todavía no existe y se le enviará automáticamente por este chat apenas el equipo la registre. No digas que ya la pediste ni inventes tiempos." + g
+	case store.OrderInDropi:
+		return "Ya se registró con la transportadora." + g + " La guía le llega por este chat."
+	case store.OrderInTransit:
+		return "Va en camino." + g
+	case store.OrderIssue:
+		return "Tiene una novedad con la transportadora; usa escalar_a_humano para que el dueño lo resuelva." + g
+	case store.OrderDelivered:
+		return "Ya fue entregado."
+	}
+	return ""
+}
+
+var (
+	arrobaRe = regexp.MustCompile(`(?i)\s*(\(arroba\)|arroba|\(at\)|\[at\])\s*`)
+	// Common typos of popular mail providers.
+	domainFixes = map[string]string{
+		"gmial.com": "gmail.com", "gmai.com": "gmail.com", "gamil.com": "gmail.com", "gmail.co": "gmail.com",
+		"gmail.con": "gmail.com", "gmail.cm": "gmail.com", "gmaill.com": "gmail.com", "gmil.com": "gmail.com",
+		"gmail.comm": "gmail.com", "gnail.com": "gmail.com", "hotmial.com": "hotmail.com", "hotmai.com": "hotmail.com",
+		"hotmail.con": "hotmail.com", "hotmal.com": "hotmail.com", "hotmail.co": "hotmail.com", "outlok.com": "outlook.com",
+		"outlook.con": "outlook.com", "yahooo.com": "yahoo.com", "yaho.com": "yahoo.com", "yahoo.con": "yahoo.com",
+		"icloud.con": "icloud.com", "iclod.com": "icloud.com",
+	}
+	knownDomains = []string{"gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "icloud.com", "yahoo.es", "hotmail.es"}
+)
+
+// EmailProblem checks an email typed in a chat. bad=true means "do not store
+// it as is"; suggestion (when not empty) is a likely intended address that the
+// seller must confirm with the customer. Handles "arroba" written out, missing
+// "@" before a known provider, and typos like gmial.com / .con.
+func EmailProblem(v string) (suggestion string, bad bool) {
+	orig := strings.TrimSpace(v)
+	s := strings.ToLower(orig)
+	s = strings.Trim(s, " .,;:¡!¿?\"'")
+	s = arrobaRe.ReplaceAllString(s, "@")
+	s = strings.ReplaceAll(s, " ", "")
+	if !strings.Contains(s, "@") {
+		for _, d := range knownDomains {
+			if strings.HasSuffix(s, d) && len(s) > len(d) {
+				s = s[:len(s)-len(d)] + "@" + d
+				break
+			}
+		}
+	}
+	if at := strings.LastIndex(s, "@"); at > 0 {
+		local, dom := s[:at], s[at+1:]
+		if fix, ok := domainFixes[dom]; ok {
+			dom = fix
+		}
+		// "samuelarrob@gmail.com": the word "arroba" got cut in the middle.
+		local = strings.TrimSuffix(strings.TrimSuffix(local, "arroba"), "arrob")
+		s = local + "@" + dom
+	}
+	if !ValidEmail(s) {
+		return "", true
+	}
+	if !strings.EqualFold(s, orig) {
+		return s, true
+	}
+	return "", false
 }

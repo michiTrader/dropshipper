@@ -108,3 +108,74 @@ func TestThinkingNeverReachesCustomer(t *testing.T) {
 }
 
 func mustJSONb(v any) []byte { b, _ := json.Marshal(v); return b }
+
+// A typo'd email is never stored: the seller gets a suggestion to confirm.
+func TestBadEmailIsNotStoredAndSuggestionGiven(t *testing.T) {
+	r := newRig(t, manualNegocio())
+	ctx := context.Background()
+	phone := "sim-badmail"
+	r.llm.push(call("c1", "guardar_datos_pedido", fullDraft("anaarrobagmail.com")), text("¿Quisiste decir ana@gmail.com?"))
+	r.say(t, phone, "mis datos, mi correo es anaarrobagmail.com")
+	o, _ := r.st.OpenOrderFor(ctx, phone)
+	if o.Email != "" {
+		t.Fatalf("el correo malo se guardó: %q", o.Email)
+	}
+	last := r.llm.seen[len(r.llm.seen)-1].Messages
+	res := last[len(last)-1].Content
+	if !strings.Contains(res, "ana@gmail.com") || !strings.Contains(res, "NO lo guardé") {
+		t.Fatalf("faltó la sugerencia al modelo: %s", res)
+	}
+}
+
+// After the order was approved, a new "sí" must not open a second order.
+func TestNoSecondOrderWhileFirstIsInFlight(t *testing.T) {
+	r := newRig(t, manualNegocio())
+	ctx := context.Background()
+	phone := "sim-twice"
+	r.llm.push(call("c1", "guardar_datos_pedido", fullDraft("ana@gmail.com")), text("Resumen"))
+	r.say(t, phone, "mis datos")
+	r.llm.push(call("c2", "confirmar_pedido", map[string]string{}), text("Confirmado"))
+	r.say(t, phone, "sí")
+	o, _ := r.st.OpenOrderFor(ctx, phone)
+	if _, err := r.sv.Approve(ctx, o.ID, "dueno"); err != nil {
+		t.Fatal(err)
+	}
+	// The model (wrongly) tries to save a new draft after the customer says "sí".
+	r.llm.push(call("c3", "guardar_datos_pedido", fullDraft("ana@gmail.com")), text("Tu pedido ya está en preparación, espera la guía."))
+	r.say(t, phone, "si")
+	orders, _ := r.st.OrdersFor(ctx, phone)
+	if len(orders) != 1 {
+		t.Fatalf("hay %d pedidos, debía seguir en 1", len(orders))
+	}
+	last := r.llm.seen[len(r.llm.seen)-1].Messages
+	if res := last[len(last)-1].Content; !strings.Contains(res, "pedido_existente") || !strings.Contains(res, "esperar la guía") {
+		t.Fatalf("la IA no recibió el aviso: %s", res)
+	}
+	// With the customer's explicit request, a second order is allowed.
+	in := fullDraft("ana@gmail.com")
+	r.llm.push(call("c4", "guardar_datos_pedido", map[string]any{"oferta_id": "1x", "nuevo_pedido": true}), text("Listo, abro un segundo pedido."))
+	r.say(t, phone, "sí quiero otro pedido adicional")
+	_ = in
+	orders, _ = r.st.OrdersFor(ctx, phone)
+	if len(orders) != 2 {
+		t.Fatalf("con nuevo_pedido debía haber 2 pedidos, hay %d", len(orders))
+	}
+}
+
+func TestPromptKnowsInFlightOrder(t *testing.T) {
+	r := newRig(t, manualNegocio())
+	ctx := context.Background()
+	phone := "sim-state"
+	r.llm.push(call("c1", "guardar_datos_pedido", fullDraft("ana@gmail.com")), text("Resumen"))
+	r.say(t, phone, "mis datos")
+	r.llm.push(call("c2", "confirmar_pedido", map[string]string{}), text("Confirmado"))
+	r.say(t, phone, "sí")
+	o, _ := r.st.OpenOrderFor(ctx, phone)
+	_, _ = r.sv.Approve(ctx, o.ID, "dueno")
+	r.llm.push(text("Tu pedido está en preparación."))
+	r.say(t, phone, "ya llegó la guía?")
+	sys := r.llm.seen[len(r.llm.seen)-1].Messages[0].Content
+	if !strings.Contains(sys, "NO crees otro pedido") || !strings.Contains(sys, "no existe") {
+		t.Fatalf("el prompt no explica el estado del pedido:\n%s", sys[len(sys)-700:])
+	}
+}

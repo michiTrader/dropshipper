@@ -9,7 +9,7 @@ const copyRow = (text) => `<div class="copyrow"><code>${esc(text || '(se mostrar
 
 const secretHint = (s) => (s && s.configurada ? `<span class="secret-note">${ic('check', 12)} Guardada (${esc(s.mascara)}). Déjalo vacío para conservarla.</span>` : '');
 const secretField = (name, label, s, o = {}) => `<label class="field${o.full ? ' full' : ''}"><span>${label}</span>
-  <input name="${name}" type="password" autocomplete="new-password" placeholder="${s && s.configurada ? 'Sin cambios' : (o.ph || '')}">
+  <input class="secret-input" name="${name}" type="password" autocomplete="new-password" readonly data-lpignore="true" data-1p-ignore placeholder="${s && s.configurada ? 'Sin cambios' : (o.ph || '')}">
   ${secretHint(s)}${o.help ? `<small>${o.help}</small>` : ''}</label>`;
 
 const testBox = () => '<div class="testres"></div>';
@@ -17,6 +17,10 @@ function showTest(box, r) {
   box.innerHTML = r.ok ? notice('ok', esc(r.mensaje || 'Conexión correcta.')) : notice('bad', esc(r.error || 'No se pudo conectar.'));
   hydrateIcons(box);
 }
+
+// Campos secretos: de solo lectura hasta que la persona entra en ellos, para que el
+// administrador de contraseñas del navegador no pegue allí el token del panel.
+document.addEventListener('focusin', (e) => { if (e.target.classList && e.target.classList.contains('secret-input')) e.target.removeAttribute('readonly'); });
 
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-copy-text]');
@@ -29,9 +33,9 @@ async function renderConexiones() {
   CN.cfg = cfg; CN.est = est; S.status = est;
   const root = $('#conexiones');
   root.innerHTML = `
-    <div class="view-head"><div><h2>Conexiones</h2><div class="sub">Todo lo que el Motor necesita para vender. Cada bloque tiene su botón de prueba y su equivalente en la terminal.</div></div></div>
-    <div id="cnIA"></div><div id="cnWA" style="margin-top:16px"></div><div id="cnPay" style="margin-top:16px"></div><div id="cnSec" style="margin-top:16px"></div>`;
-  drawIA(); drawWhatsApp(); drawPagos(); drawSeguridad();
+    <div class="view-head"><div><h2>Conexiones</h2><div class="sub">Todo lo que el Motor necesita para vender. Cada bloque tiene su botón de prueba.</div></div></div>
+    <div id="cnIA"></div><div id="cnDropi" style="margin-top:16px"></div><div id="cnWA" style="margin-top:16px"></div><div id="cnPay" style="margin-top:16px"></div><div id="cnSec" style="margin-top:16px"></div>`;
+  drawIA(); drawDropi(); drawWhatsApp(); drawPagos(); drawSeguridad();
   refreshBadges();
 }
 
@@ -49,13 +53,7 @@ function drawIA() {
     <div class="card-head"><span class="ico">${ic('cpu', 18)}</span><div><h3>Inteligencia artificial</h3>
       <div class="desc">Sirve cualquier proveedor compatible con la API de OpenAI: DeepSeek, OpenAI, OpenRouter, Groq, Gemini, Ollama local, Arxi u otro. Solo necesitas la dirección, el modelo y la clave.</div></div>
       <span class="spacer"></span><button class="btn primary" id="iaAdd">${ic('plus', 14)} Agregar proveedor</button></div>
-    ${rows || '<div class="empty">Aún no hay ningún proveedor. Agrega uno para que el vendedor pueda responder.</div>'}
-    ${termBlock('Hacerlo desde la terminal', `motor ia presets                       # proveedores conocidos
-echo $MI_CLAVE | motor ia agregar --preset deepseek --clave - --activar
-motor ia agregar --nombre Arxi --url https://api.arxi.example/v1 --modelo mi-modelo --clave - --activar
-motor ia modelos [ID]                    # lista los modelos disponibles
-motor ia probar  [ID]                    # llamada real de prueba
-motor ia activar ID | quitar ID`)}</div>`;
+    ${rows || '<div class="empty">Aún no hay ningún proveedor. Agrega uno para que el vendedor pueda responder.</div>'}</div>`;
   $('#iaAdd').onclick = () => openProvider(null);
   $$('#cnIA .prov').forEach((row) => {
     const p = ia.proveedores.find((x) => x.id === row.dataset.pid);
@@ -152,31 +150,73 @@ function openProvider(p) {
   };
 }
 
+
+// =============== Dropi ===============
+function drawDropi() {
+  const d = CN.cfg.dropi;
+  const modoApi = (CN.cfg.negocio.dropi || {}).modo === 'api';
+  $('#cnDropi').innerHTML = `<div class="card">
+    <div class="card-head"><span class="ico">${ic('truck', 18)}</span><div><h3>Dropi ${d.configurado ? '<span class="tag ok">Conectado</span>' : '<span class="tag">Sin conectar</span>'}</h3>
+      <div class="desc">Con Dropi el Motor cotiza el flete real de cada transportadora, elige la más rentable y trae el costo de tus productos. Sin conectarlo funciona igual, con los valores que escribas a mano.</div></div></div>
+    ${d.configurado ? '' : notice('info', '<b>Cómo conectarlo:</b> en Dropi entra a <b>Configuración → Integraciones</b>, crea una integración y copia el token. Pégalo aquí, indica desde qué ciudad despachas y pulsa <b>Probar conexión</b>.')}
+    <form id="dpForm" autocomplete="off">
+      <div class="fgrid">
+        <label class="field full"><span>Token de integración de Dropi</span>
+          <input class="secret-input" name="token" type="password" autocomplete="new-password" readonly data-lpignore="true" data-1p-ignore placeholder="${d.token.configurada ? 'Sin cambios' : 'Pega aquí el token completo'}">
+          ${secretHint(d.token)}<small>Se guarda en la base de datos del Motor y nunca se vuelve a mostrar completo.</small></label>
+        ${fld('origen_departamento', 'Departamento de origen', d.origen_departamento, { ph: 'Antioquia', help: 'Desde donde sale tu mercancía (bodega del proveedor o la tuya).' })}
+        ${fld('origen_ciudad', 'Ciudad de origen', d.origen_ciudad, { ph: 'Medellín', help: 'Se usa para cotizar el flete hacia cada destino.' })}
+        <label class="switch full"><input type="checkbox" name="sandbox" ${d.sandbox ? 'checked' : ''}><div><b>Entorno de pruebas de Dropi</b><span>Úsalo solo para probar el token. En pruebas no hay transportadoras, así que no se cotizan fletes; para eso desmárcalo.</span></div></label>
+      </div>
+      <div class="small muted" style="margin:2px 0 10px">Servidor: <code>${esc(d.base_url)}</code></div>
+      ${d.configurado ? sw('dp_modo_api', 'Crear los pedidos aprobados directamente en Dropi', 'Si lo apagas, el Motor te entrega los datos listos para copiar y tú registras la guía a mano.', modoApi) : ''}
+      <div class="testres" id="dpTest"></div>
+      <div class="form-actions"><button class="btn" type="button" id="dpTestBtn">${ic('refresh', 14)} Probar conexión</button><span class="spacer"></span>
+        ${d.configurado ? '<button class="btn danger" type="button" id="dpDel">Desconectar</button>' : ''}<button class="btn primary" type="submit">Guardar Dropi</button></div>
+    </form>
+    ${d.configurado ? `<div class="subcard"><h4>Simular un pedido</h4><div class="small muted" style="margin-bottom:8px">Prueba qué haría el Motor con un pedido real: cotiza, elige transportadora y revisa costos. <b>No crea nada en Dropi.</b> </div><a class="btn small" href="#envios">${ic('truck', 13)} Ir al simulador</a></div>` : ''}
+  </div>`;
+  const f = $('#dpForm');
+  const body = () => { const x = formData(f); x.sandbox = f.sandbox.checked; return x; };
+  $('#dpTestBtn').onclick = (e) => busy(e.currentTarget, async () => showTest($('#dpTest'), await post('/api/dropi/probar', body())));
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    await busy(e.submitter, async () => {
+      try {
+        await put('/api/ajustes/dropi', body());
+        if (f.dp_modo_api) await put('/api/ajustes/negocio', { dropi: { modo: f.dp_modo_api.checked ? 'api' : 'manual' } });
+        toast('Dropi guardado.'); renderConexiones();
+      } catch (err) { toast(err.message, true); }
+    });
+  };
+  const del_ = $('#dpDel');
+  if (del_) del_.onclick = async () => {
+    if (!confirm('¿Desconectar Dropi? Se borra el token guardado y los fletes volverán a ser los estimados.')) return;
+    try { await del('/api/ajustes/dropi'); toast('Dropi desconectado.'); renderConexiones(); } catch (err) { toast(err.message, true); }
+  };
+}
+
 // =============== WhatsApp ===============
 function drawWhatsApp() {
   const w = CN.cfg.whatsapp;
   $('#cnWA').innerHTML = `<div class="card">
     <div class="card-head"><span class="ico">${ic('message', 18)}</span><div><h3>WhatsApp Business ${w.configurado ? '<span class="tag ok">Conectado</span>' : '<span class="tag">Sin conectar</span>'}</h3>
-      <div class="desc">API oficial de Meta (WhatsApp Cloud). Sin esto solo funciona el Simulador. Pasos detallados en <code>docs/CONFIGURACION.md</code>.</div></div></div>
+      <div class="desc">API oficial de Meta (WhatsApp Cloud). Sin esto solo funciona el Simulador. Los pasos para obtener estos datos están en la guía de configuración.</div></div></div>
     <form id="waForm" autocomplete="off">
       <div class="fgrid">
         ${secretField('token', 'Token de acceso permanente', w.token, { ph: 'EAAG...', help: 'Se crea en Meta for Developers, con un usuario del sistema.' })}
         ${fld('phone_number_id', 'ID del número de teléfono', w.phone_number_id, { help: 'No es el número: es el identificador que muestra Meta.' })}
-        <label class="field"><span>Token de verificación del webhook</span><div class="inline"><input name="verify_token" type="password" autocomplete="new-password" placeholder="${w.verify_token.configurada ? 'Sin cambios' : 'Invéntalo o genéralo'}"><button class="btn" type="button" id="waGen">Generar</button></div>
+        <label class="field"><span>Token de verificación del webhook</span><div class="inline"><input class="secret-input" name="verify_token" type="password" autocomplete="new-password" readonly data-lpignore="true" data-1p-ignore placeholder="${w.verify_token.configurada ? 'Sin cambios' : 'Invéntalo o genéralo'}"><button class="btn" type="button" id="waGen">Generar</button></div>
           ${secretHint(w.verify_token)}<small>Debe ser el mismo texto que escribas en Meta al registrar el webhook.</small></label>
         ${secretField('app_secret', 'Secreto de la app (recomendado)', w.app_secret, { help: 'Permite verificar que los mensajes entrantes vienen de Meta.' })}
         ${fld('graph_version', 'Versión de la API', w.graph_version, { ph: 'v21.0' })}
       </div>
-      <div class="field"><span style="font-size:12px;font-weight:600;color:#3d4a60">Dirección del webhook (pégala en Meta)</span>${copyRow(w.webhook_url)}
+      <div class="field"><span style="font-size:12px;font-weight:600;color:var(--text-2)">Dirección del webhook (pégala en Meta)</span>${copyRow(w.webhook_url)}
         ${CN.cfg.general.url_publica ? '' : `<small class="muted">Usa tu dirección pública para que Meta pueda llegar. Defínela en Seguridad y acceso.</small>`}</div>
       <div class="testres" id="waTest"></div>
       <div class="form-actions"><button class="btn" type="button" id="waTestBtn">${ic('refresh', 14)} Probar conexión</button><span class="spacer"></span>
         ${w.configurado ? '<button class="btn danger" type="button" id="waDel">Desconectar</button>' : ''}<button class="btn primary" type="submit">Guardar</button></div>
-    </form>
-    ${termBlock('Hacerlo desde la terminal', `echo $WA_TOKEN | motor whatsapp configurar --token - --telefono-id 123456789 --verify-token mi-texto
-motor whatsapp probar
-motor whatsapp ver        # estado sin mostrar secretos
-motor whatsapp quitar`)}</div>`;
+    </form></div>`;
   const f = $('#waForm');
   $('#waGen').onclick = () => { f.verify_token.type = 'text'; f.verify_token.value = randHex(12); toast('Token generado. Guarda y cópialo en Meta.'); };
   $('#waTestBtn').onclick = (e) => busy(e.currentTarget, async () => showTest($('#waTest'), await post('/api/whatsapp/probar', formData(f))));
@@ -211,11 +251,7 @@ function drawPagos() {
       <div data-pm="wompi" class="hidden">${notice('info', 'Wompi genera un enlace de pago y confirma el pago automáticamente. Las llaves se configuran en el bloque siguiente.')}
         ${wp.configurado ? notice('ok', 'Wompi está configurado.') : notice('warn', 'Falta configurar las llaves de Wompi (abajo).')}</div>
       <div class="form-actions"><span class="spacer"></span><button class="btn primary" type="submit">Guardar forma de cobro</button></div>
-    </form>
-    ${termBlock('Hacerlo desde la terminal', `motor negocio poner pagos.metodo manual
-motor negocio poner pagos.manual.llave_bre_b 3001234567
-motor negocio poner pagos.manual.banco Bancolombia
-motor negocio poner pagos.horas_para_pagar 24`)}</div>
+    </form></div>
 
     <div class="card" style="margin-top:16px">
     <div class="card-head"><span class="ico">${ic('dollar', 18)}</span><div><h3>Wompi ${wp.configurado ? '<span class="tag ok">Configurado</span>' : '<span class="tag">Opcional</span>'}</h3>
@@ -225,13 +261,10 @@ motor negocio poner pagos.horas_para_pagar 24`)}</div>
       ${secretField('private_key', 'Llave privada', wp.private_key, { ph: 'prv_test_...' })}
       ${secretField('events_secret', 'Secreto de eventos', wp.events_secret, { help: 'Necesario para confirmar los pagos de forma segura.' })}
       <label class="switch" style="align-self:end"><input type="checkbox" name="sandbox" ${wp.sandbox ? 'checked' : ''}><div><b>Modo de pruebas</b><span>Desmárcalo para recibir pagos reales.</span></div></label></div>
-      <div class="field"><span style="font-size:12px;font-weight:600;color:#3d4a60">URL de eventos (pégala en Wompi)</span>${copyRow(wp.events_url)}</div>
+      <div class="field"><span style="font-size:12px;font-weight:600;color:var(--text-2)">URL de eventos (pégala en Wompi)</span>${copyRow(wp.events_url)}</div>
       <div class="testres" id="wpTest"></div>
       <div class="form-actions"><button class="btn" type="button" id="wpTestBtn">${ic('refresh', 14)} Probar conexión</button><span class="spacer"></span>
-        ${wp.configurado ? '<button class="btn danger" type="button" id="wpDel">Quitar Wompi</button>' : ''}<button class="btn primary" type="submit">Guardar Wompi</button></div></form>
-    ${termBlock('Hacerlo desde la terminal', `echo $WOMPI_PRIVADA | motor wompi configurar --llave-publica pub_test_xxx --llave-privada - --eventos secreto --pruebas
-motor wompi probar
-motor negocio poner pagos.metodo wompi`)}</div>`;
+        ${wp.configurado ? '<button class="btn danger" type="button" id="wpDel">Quitar Wompi</button>' : ''}<button class="btn primary" type="submit">Guardar Wompi</button></div></form></div>`;
 
   const setMethod = (mt) => {
     st.metodo = mt;
@@ -282,12 +315,7 @@ function drawSeguridad() {
       <button class="btn primary" id="tkGen">${ic('key', 14)} ${g.token.configurada ? 'Generar token nuevo' : 'Generar token de acceso'}</button>
       <button class="btn" id="tkSet">Definir mi propio token</button>
       ${g.token.configurada ? `<button class="btn danger" id="tkDel">Quitar token</button>` : ''}</div>
-    <div id="tkResult"></div>
-    ${termBlock('Hacerlo desde la terminal', `motor token generar      # crea y muestra un token nuevo
-motor token poner MI_TOKEN_SEGURO
-motor token quitar
-motor url https://mi-motor.ejemplo.com
-motor estado             # resumen de lo conectado y lo que falta`)}</div>`;
+    <div id="tkResult"></div></div>`;
 
   $('#urlForm').onsubmit = async (e) => {
     e.preventDefault();

@@ -200,6 +200,7 @@ func (s *Seller) tools() []llm.Tool {
 				"direccion":       llm.Str("Dirección exacta (calle, carrera, número)"),
 				"referencias":     llm.Str("Referencias: torre, apto, color de la casa, punto de referencia"),
 				"notas":           llm.Str("Notas para el despacho (horario, indicaciones)"),
+				"nuevo_pedido":    map[string]any{"type": "boolean", "description": "true SOLO si el cliente ya tiene un pedido en camino y confirmó de forma explícita que quiere OTRO pedido adicional. Nunca lo uses por tu cuenta."},
 			})),
 		llm.Func("confirmar_pedido",
 			"Registra que el cliente CONFIRMÓ EXPLÍCITAMENTE el resumen del pedido (dijo 'sí', 'correcto', 'confirmo'). Nunca la llames antes de enviar el resumen ni sin un sí claro del cliente.",
@@ -364,6 +365,8 @@ Ayudar de verdad al cliente y cerrar la venta de forma natural y ética: entende
 - Si el cliente envía una foto o captura después de pedirle el anticipo, agradécele: el sistema la registra como comprobante y el equipo verifica el pago. No confirmes pagos tú mismo.
 - NO pidas la cédula. Para el pedido necesitas: nombre completo, celular, correo electrónico, departamento, ciudad, barrio y dirección exacta.
 - Nunca afirmes que el pedido quedó confirmado, registrado o guardado si no llamaste la herramienta correspondiente en esta respuesta. Nunca digas "déjame verificar" o "déjame revisar" y te detengas: si necesitas algo, usa la herramienta en ese mismo momento y responde con el resultado.
+- Formato de los datos del cliente: si el correo, el celular, el nombre o la ciudad vienen mal escritos (por ejemplo "juanarrobagmail.com", un celular que no tiene 10 dígitos, un nombre de una sola palabra, una ciudad que no existe), NO los des por buenos: pregúntale con amabilidad si quiso decir lo que el sistema te sugiere (por ejemplo juan@gmail.com) y guarda el dato solo cuando lo confirme. Si el cliente te dice que no sabe escribir el símbolo @, explícale que es la tecla "Alt Gr + Q" o el símbolo que aparece al mantener presionada la tecla de la letra "a" en el teclado del celular, o que te deletree el correo.
+- Si el cliente ya tiene un pedido confirmado o en camino, NUNCA lo trates como pedido nuevo: dile el estado real y que debe esperar la guía. Un segundo pedido solo se crea si el cliente lo pide de forma explícita.
 - Si recibes una nota de voz que no puedes escuchar, pide con amabilidad que te escriba el mensaje.
 - Si el cliente pide hablar con una persona, llamada, tiene un reclamo o hay un caso delicado, usa escalar_a_humano.
 - Mensajes marcados [Mensaje del equipo] los escribió el dueño de la tienda: respétalos y continúa coherente con ellos.
@@ -405,7 +408,7 @@ Ayudar de verdad al cliente y cerrar la venta de forma natural y ética: entende
 		case store.OrderAwaitPayment:
 			fmt.Fprintf(&b, "Esperando el anticipo de $%s (estado del pago: %s). Si el cliente pregunta, recuérdale que envíe el comprobante.\n", catalog.FormatCOP(o.AdvanceAmount), o.PaymentStatus)
 		case store.OrderPendingApprove:
-			b.WriteString("El pedido ya está confirmado y en revisión para despacho. No lo vuelvas a confirmar.\n")
+			b.WriteString("El pedido ya está confirmado y en revisión para despacho. No lo vuelvas a confirmar. Si el cliente pregunta por la guía, dile que apenas el equipo la registre le llega por este chat; no prometas fecha.\n")
 		}
 	} else if orders, err := s.Store.OrdersFor(ctx, c.Phone); err == nil && len(orders) > 0 {
 		o := orders[0]
@@ -413,7 +416,8 @@ Ayudar de verdad al cliente y cerrar la venta de forma natural y ética: entende
 		if o.TrackingNumber != "" {
 			fmt.Fprintf(&b, " · guía %s (%s)", o.TrackingNumber, o.Carrier)
 		}
-		b.WriteString(". Si pregunta por su pedido, dale esta información. Si quiere comprar otra vez, se crea un pedido nuevo.\n")
+		b.WriteString(". " + sales.StatusNote(o) + "\n")
+		b.WriteString("Si el cliente escribe \"sí\", \"ya\" o pregunta por su pedido, se refiere a ESTE pedido: dile en qué estado está y que debe esperar la guía. NO crees otro pedido. Solo si pide comprar otra vez, pregúntale de forma explícita si quiere un pedido adicional y, únicamente si lo confirma, usa guardar_datos_pedido con nuevo_pedido=true.\n")
 	} else {
 		b.WriteString("Sin pedidos todavía.\n")
 	}

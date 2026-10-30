@@ -118,6 +118,10 @@ type Autonomia struct {
 	AutoSoloRiesgoBajo bool  `yaml:"auto_solo_riesgo_normal" json:"auto_solo_riesgo_normal"`
 }
 
+// DefaultEsperaAgruparSeg: customers write in separate lines, so the seller
+// waits one minute after the last message before answering.
+const DefaultEsperaAgruparSeg = 60
+
 // Conversacion tunes the chat behaviour.
 type Conversacion struct {
 	// EsperaAgruparSeg: customers often send several short messages in a row;
@@ -287,7 +291,7 @@ func (n *Negocio) ApplyDefaults() {
 		n.Pagos.HorasParaPagar = 24
 	}
 	if n.Conversacion.EsperaAgruparSeg == 0 {
-		n.Conversacion.EsperaAgruparSeg = 4
+		n.Conversacion.EsperaAgruparSeg = DefaultEsperaAgruparSeg
 	}
 	if n.Conversacion.PausaEntreMensajesMs == 0 {
 		n.Conversacion.PausaEntreMensajesMs = 1200
