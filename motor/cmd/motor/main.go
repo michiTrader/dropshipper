@@ -34,6 +34,7 @@ import (
 	"github.com/michiTrader/dropshipper/motor/internal/settings"
 	"github.com/michiTrader/dropshipper/motor/internal/shipping"
 	"github.com/michiTrader/dropshipper/motor/internal/store"
+	"github.com/michiTrader/dropshipper/motor/internal/whatsweb"
 )
 
 func main() {
@@ -105,6 +106,10 @@ func serve(dir string, lg *log.Logger) error {
 	}
 
 	h := hub.New()
+	mediaDir := filepath.Join(cfg.DataDir, "media")
+	// WhatsApp Web (linked phone). It stays idle until that channel is selected.
+	h.Web = whatsweb.New(cfg.DataDir, mediaDir, lg)
+	defer h.Web.Close()
 	live := config.NewLive(a.set.Get().Negocio)
 	a.set.OnChange(func(s settings.Settings) {
 		h.Apply(s)
@@ -127,10 +132,26 @@ func serve(dir string, lg *log.Logger) error {
 	engine := convo.NewEngine(a.st, seller, sv, h, live, lg)
 	sv.Notifier = engine
 	defer engine.Close()
+	h.Web.SetHandlers(
+		func(ctx context.Context, m whatsweb.Message) {
+			in := convo.Inbound{Phone: m.Phone, Name: m.Name, Kind: m.Kind, Text: m.Text, MediaPath: m.MediaPath, WAID: m.WAID, At: m.At}
+			if err := engine.HandleInbound(ctx, in); err != nil {
+				lg.Printf("mensaje de %s: %v", m.Phone, err)
+			}
+		},
+		func(ids []string, status string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			for _, id := range ids {
+				_ = a.st.UpdateMessageStatus(ctx, id, status)
+			}
+		},
+		func() { engine.Events.Publish(convo.Event{Type: "whatsapp"}) },
+	)
 
 	srv := &api.Server{
 		Settings: a.set, Hub: h, Store: a.st, Engine: engine, Sales: sv, Catalog: a.cat, Zones: zones, Shipping: ship,
-		MediaDir: filepath.Join(cfg.DataDir, "media"), Log: lg, Started: time.Now().UTC(),
+		MediaDir: mediaDir, Log: lg, Started: time.Now().UTC(),
 	}
 	httpSrv := &http.Server{
 		Addr:              fmt.Sprintf("0.0.0.0:%d", cfg.Port),
@@ -193,7 +214,11 @@ func printBanner(lg *log.Logger, a *app, h *hub.Hub, port int) {
 	} else {
 		lg.Printf("%s IA: sin proveedor (panel > Conexiones, o: motor ia agregar)", mark(false))
 	}
-	lg.Printf("%s WhatsApp Cloud API", mark(h.WhatsApp() != nil))
+	if s.WhatsApp.UsesWeb() {
+		lg.Printf("%s WhatsApp Web (teléfono vinculado con QR; estado en el panel > Conexiones)", mark(h.Available()))
+	} else {
+		lg.Printf("%s WhatsApp Cloud API", mark(h.WhatsApp() != nil))
+	}
 	pagosOK := (n.Pagos.Metodo == "wompi" && h.Wompi() != nil) ||
 		(n.Pagos.Metodo == "manual" && (n.Pagos.Manual.LlaveBreB != "" || n.Pagos.Manual.NumeroCuenta != ""))
 	lg.Printf("%s Pagos anticipados: %s", mark(pagosOK), n.Pagos.Metodo)

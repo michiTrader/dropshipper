@@ -280,9 +280,10 @@ Tres capas, gobernadas con la memoria de Arxi (con confianza y procedencia, y na
 | Servicio | Vía | Estado / nota |
 |---|---|---|
 | **DeepSeek** | API compatible con OpenAI (ya soportado por Arxi) | ✅ Ya tienes la API. Modelo principal para chats y razonamiento (barato) |
-| **WhatsApp** | **WhatsApp Business Cloud API (Meta) oficial** | ✅ Recomendado. Las librerías no oficiales (Baileys, whatsapp-web.js) arriesgan **el bloqueo del número**. Requiere número dedicado y verificación del negocio en Meta |
+| **WhatsApp** | **WhatsApp Business Cloud API (Meta) oficial** o **WhatsApp Web** (teléfono vinculado con código QR, no oficial) | ✅ El Motor soporta **ambos canales** y se elige en Conexiones. La API oficial es la recomendada y estable, pero Meta exige documentos del negocio para dar el token permanente. WhatsApp Web (librería `whatsmeow`) permite empezar sin esos papeles, pero **no es oficial**: WhatsApp puede restringir el número si envía muchos mensajes o escribe a desconocidos. Úsalo con un número dedicado y solo para responder a quien te escribe; migra a la API oficial cuando tengas la verificación |
 | **Dropi** | API de integraciones (token generado en Dropi + `POST /integrations/login`) | ⚠️ Hay que **solicitar el acceso** al equipo de Dropi y confirmar los endpoints de crear orden, transportadoras, cotización y estados |
 | **DropKiller** | **Servidor MCP oficial** `https://app.dropkiller.com/api/mcp` (OAuth 2.1, 33 herramientas) | ✅ Existe. ⚠️ Requiere **plan Advanced** |
+| **Kalodata** | Servidor **MCP** (sin API directa, igual que DropKiller). Prueba gratuita de 7 días disponible | ⏳ **PENDIENTE** (Fase 4, no implementado). Convivirá con DropKiller: el Cazador debe poder usar **ambos proveedores** de datos de productos y cruzar sus resultados. Por definir: URL del MCP, método de autenticación y herramientas disponibles |
 | **Shopify** | Admin API (GraphQL) | ✅ Productos, páginas y landings |
 | **Meta Ads** | Marketing API | ✅ Crear campañas, conjuntos y anuncios (en pausa) y leer Insights. Requiere app de Meta + permisos `ads_management` |
 | **Pagos anticipados** | Wompi (Bancolombia) / Bold / Mercado Pago: links de pago + webhook | ✅ La confirmación automática del pago es clave |
@@ -326,7 +327,7 @@ dropshipper/
 | **1. MVP Vendedor** ⭐ | Vendedor IA responde y cierra 24/7, extrae datos, crea **pedido borrador**, botón Aprobar → Dropi, "Yo tomo", reglas de zona básicas, app de escritorio con Conversaciones + Aprobaciones + Pedidos | **Dejas de perder clientes** | 3-4 semanas |
 | **2. Cobro y postventa** | Links de pago anticipado + confirmación automática, seguimiento de guía, novedades y rescate de devoluciones | Menos devoluciones, más flujo de caja | 2 semanas |
 | **3. Finanzas** | Rentabilidad por pedido y producto, CPA máximo, COP/USD, lectura de Meta Insights, recomendaciones de escalar | Saber cuánto invertir | 2 semanas |
-| **4. Cazador + Propuestas** | DropKiller MCP, análisis de videos y hooks, bandeja de Propuestas, búsquedas programadas | Nuevos productos con datos | 2 semanas |
+| **4. Cazador + Propuestas** | DropKiller MCP **y Kalodata MCP (pendiente; ambos proveedores deben coexistir, probar con los 7 días gratis de Kalodata)**, análisis de videos y hooks, bandeja de Propuestas, búsquedas programadas | Nuevos productos con datos | 2 semanas |
 | **5. Landings** | Generador de landing por producto (copy + psicología + diseño) → Shopify | Lanzar productos en horas | 2 semanas |
 | **6. Media Buyer** | Crear campañas en Meta (en pausa) desde una propuesta + recomendaciones diarias de presupuesto | Lanzar y escalar anuncios con un clic | 2-3 semanas |
 | **7. Móvil + bola de nieve** | PWA/app móvil, Bibliotecario con lecciones aprobadas | Operar desde el celular | continuo |

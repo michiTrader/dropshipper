@@ -4,7 +4,7 @@ import "sync"
 
 // Event tells open panels that something changed (they refetch what they show).
 type Event struct {
-	Type  string `json:"type"` // mensaje, escribiendo, listo, pedido, alerta, contacto
+	Type  string `json:"type"` // mensaje, escribiendo, listo, pedido, alerta, contacto, whatsapp
 	Phone string `json:"phone,omitempty"`
 	ID    int64  `json:"id,omitempty"`
 	Text  string `json:"text,omitempty"`

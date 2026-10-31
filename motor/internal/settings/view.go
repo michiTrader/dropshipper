@@ -46,6 +46,7 @@ type IAView struct {
 
 // WhatsAppView is the WhatsApp section (secrets masked).
 type WhatsAppView struct {
+	Canal         string `json:"canal"`
 	Token         Secret `json:"token"`
 	PhoneNumberID string `json:"phone_number_id"`
 	VerifyToken   Secret `json:"verify_token"`
@@ -118,7 +119,7 @@ func (s Settings) Public(webhookBase string) View {
 		})
 	}
 	w := s.WhatsApp
-	v.WhatsApp = WhatsAppView{Token: NewSecret(w.Token), PhoneNumberID: w.PhoneNumberID, VerifyToken: NewSecret(w.VerifyToken),
+	v.WhatsApp = WhatsAppView{Canal: w.Channel(), Token: NewSecret(w.Token), PhoneNumberID: w.PhoneNumberID, VerifyToken: NewSecret(w.VerifyToken),
 		AppSecret: NewSecret(w.AppSecret), GraphVersion: w.GraphVersion, Configured: w.Enabled(), WebhookURL: base + "/webhook/whatsapp"}
 	o := s.Wompi
 	v.Wompi = WompiView{PublicKey: o.PublicKey, PrivateKey: NewSecret(o.PrivateKey), EventsSecret: NewSecret(o.EventsSecret),

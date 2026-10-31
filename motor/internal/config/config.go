@@ -43,8 +43,16 @@ type LLMConfig struct {
 	Temperature *float64
 }
 
-// WhatsAppConfig holds the WhatsApp Business Cloud API credentials.
+// Channels the Motor can use to talk to customers on WhatsApp.
+const (
+	ChannelCloud = "cloud" // official WhatsApp Business Cloud API (Meta)
+	ChannelWeb   = "web"   // WhatsApp Web: a phone linked with a QR code (unofficial)
+)
+
+// WhatsAppConfig holds the WhatsApp settings: which channel is used and the
+// Cloud API credentials (kept even while the Web channel is selected).
 type WhatsAppConfig struct {
+	Canal         string `json:"canal"`
 	Token         string `json:"token"`
 	PhoneNumberID string `json:"phone_number_id"`
 	VerifyToken   string `json:"verify_token"`
@@ -52,8 +60,22 @@ type WhatsAppConfig struct {
 	GraphVersion  string `json:"graph_version"`
 }
 
-// Enabled reports whether real WhatsApp sending is configured.
+// Channel is the selected channel; anything but "web" means the Cloud API.
+func (w WhatsAppConfig) Channel() string {
+	if w.Canal == ChannelWeb {
+		return ChannelWeb
+	}
+	return ChannelCloud
+}
+
+// UsesWeb reports whether the WhatsApp Web channel is selected.
+func (w WhatsAppConfig) UsesWeb() bool { return w.Channel() == ChannelWeb }
+
+// Enabled reports whether the Cloud API credentials are complete.
 func (w WhatsAppConfig) Enabled() bool { return w.Token != "" && w.PhoneNumberID != "" }
+
+// UsesCloud reports whether the Cloud API is the selected channel and ready.
+func (w WhatsAppConfig) UsesCloud() bool { return !w.UsesWeb() && w.Enabled() }
 
 // WompiConfig holds Wompi (Bancolombia) credentials for automatic payment links.
 type WompiConfig struct {

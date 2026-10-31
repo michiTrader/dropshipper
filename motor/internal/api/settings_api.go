@@ -30,6 +30,7 @@ func (s *Server) settingsRoutes(api *http.ServeMux) {
 	api.HandleFunc("PUT /api/ajustes/general", s.putGeneral)
 	api.HandleFunc("PUT /api/ajustes/whatsapp", s.putWhatsApp)
 	api.HandleFunc("DELETE /api/ajustes/whatsapp", s.delWhatsApp)
+	api.HandleFunc("PUT /api/ajustes/whatsapp/canal", s.putWhatsAppChannel)
 	api.HandleFunc("PUT /api/ajustes/wompi", s.putWompi)
 	api.HandleFunc("DELETE /api/ajustes/wompi", s.delWompi)
 	api.HandleFunc("POST /api/whatsapp/probar", s.testWhatsApp)
@@ -117,6 +118,7 @@ func (s *Server) putGeneral(w http.ResponseWriter, r *http.Request) {
 }
 
 type waIn struct {
+	Canal         string `json:"canal"`
 	Token         string `json:"token"`
 	PhoneNumberID string `json:"phone_number_id"`
 	VerifyToken   string `json:"verify_token"`
@@ -126,6 +128,9 @@ type waIn struct {
 
 func (in waIn) apply(old config.WhatsAppConfig) config.WhatsAppConfig {
 	out := old
+	if c := strings.TrimSpace(in.Canal); c != "" {
+		out.Canal = c
+	}
 	out.Token = keep(in.Token, old.Token)
 	out.VerifyToken = keep(in.VerifyToken, old.VerifyToken)
 	out.AppSecret = keep(in.AppSecret, old.AppSecret)
@@ -147,7 +152,7 @@ func (s *Server) putWhatsApp(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.update(w, r, func(st *settings.Settings) error {
 		st.WhatsApp = in.apply(st.WhatsApp)
-		if (st.WhatsApp.Token == "") != (st.WhatsApp.PhoneNumberID == "") {
+		if !st.WhatsApp.UsesWeb() && (st.WhatsApp.Token == "") != (st.WhatsApp.PhoneNumberID == "") {
 			return errors.New("para conectar WhatsApp se necesitan las dos cosas: el token de acceso y el ID del número de teléfono")
 		}
 		return nil
@@ -156,9 +161,31 @@ func (s *Server) putWhatsApp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// putWhatsAppChannel switches between the official API and WhatsApp Web without
+// touching the saved Meta credentials.
+func (s *Server) putWhatsAppChannel(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Canal string `json:"canal"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if in.Canal != config.ChannelCloud && in.Canal != config.ChannelWeb {
+		writeErr(w, errors.New("el canal debe ser 'cloud' o 'web'"))
+		return
+	}
+	if s.update(w, r, func(st *settings.Settings) error {
+		st.WhatsApp.Canal = in.Canal
+		return nil
+	}) {
+		writeJSON(w, 200, map[string]any{"ok": true, "canal": in.Canal})
+	}
+}
+
 func (s *Server) delWhatsApp(w http.ResponseWriter, r *http.Request) {
 	if s.update(w, r, func(st *settings.Settings) error {
-		st.WhatsApp = config.WhatsAppConfig{GraphVersion: "v21.0"}
+		st.WhatsApp = config.WhatsAppConfig{Canal: st.WhatsApp.Canal, GraphVersion: "v21.0"}
 		return nil
 	}) {
 		writeJSON(w, 200, map[string]any{"ok": true})
@@ -582,7 +609,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			"hay_proveedor": hasProv, "proveedores": provs,
 		},
 		"whatsapp": map[string]any{
-			"configurado": st.WhatsApp.Enabled(), "verify_token": st.WhatsApp.VerifyToken != "",
+			"canal": st.WhatsApp.Channel(), "configurado": s.Hub.Available(), "nube_configurada": st.WhatsApp.Enabled(),
+			"web": s.Hub.Web.Info(), "verify_token": st.WhatsApp.VerifyToken != "",
 			"firma_verificada": st.WhatsApp.AppSecret != "", "webhook_url": base + "/webhook/whatsapp",
 		},
 		"pagos": map[string]any{
