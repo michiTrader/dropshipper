@@ -189,6 +189,11 @@ func (s *Settings) Validate() error {
 	if t := s.General.AdminToken; t != "" && (s.WhatsApp.Token == t || s.WhatsApp.VerifyToken == t || s.WhatsApp.AppSecret == t) {
 		return errors.New("el dato de WhatsApp es igual al token de acceso del panel: seguramente el navegador lo rellenó solo. Pega aquí el valor que te dio Meta")
 	}
+	switch s.WhatsApp.Canal {
+	case "", config.ChannelCloud, config.ChannelWeb:
+	default:
+		return errors.New("el canal de WhatsApp debe ser 'cloud' (API oficial) o 'web' (WhatsApp Web)")
+	}
 	s.Dropi.Token = strings.TrimSpace(s.Dropi.Token)
 	s.Dropi.OriginDept = strings.TrimSpace(s.Dropi.OriginDept)
 	s.Dropi.OriginCity = strings.TrimSpace(s.Dropi.OriginCity)

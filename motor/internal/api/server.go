@@ -68,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/stats", s.stats)
 	api.HandleFunc("GET /api/eventos", s.events)
 	s.settingsRoutes(api)
+	s.whatsWebRoutes(api)
 	s.productRoutes(api)
 	api.HandleFunc("GET /api/contactos", s.contacts)
 	api.HandleFunc("GET /api/contactos/{phone}", s.contact)

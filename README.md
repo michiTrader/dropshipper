@@ -5,13 +5,32 @@ Equipo de agentes de IA para dropshipping contraentrega en Colombia. Primer prod
 ## Estado: Fase 1, Vendedor IA por WhatsApp (codigo listo, falta conectar tus cuentas)
 
 El **Motor** (`motor/`) es un solo programa en Go que:
-- atiende WhatsApp con una vendedora IA que usa **cualquier proveedor compatible con OpenAI** (DeepSeek, OpenAI, OpenRouter, Groq, Gemini, Ollama local, Arxi u otro: basta URL, modelo y clave);
+- atiende WhatsApp (por la **API oficial de Meta** o por **WhatsApp Web vinculando tu telefono con un codigo QR**) con una vendedora IA que usa **cualquier proveedor compatible con OpenAI** (DeepSeek, OpenAI, OpenRouter, Groq, Gemini, Ollama local, Arxi u otro: basta URL, modelo y clave);
 - vende **varios productos**, cada uno con su ficha, ofertas, costos y finanzas;
 - toma los datos de envio y decide **contraentrega o anticipo** segun `knowledge/zonas.yaml`;
 - cobra anticipos por **llave Bre-B / cuenta bancaria** (verificas el comprobante) o por **Wompi** (automatico);
 - deja cada pedido en **Aprobaciones** con su rentabilidad (incluye el riesgo de devolucion) para que lo apruebes;
 - permite **tomar el control** de cualquier chat y registra **por que** la IA hizo cada cosa;
 - trae un **panel web** (escritorio y celular, instalable) y un **simulador** para probar sin WhatsApp.
+
+## WhatsApp: dos canales
+
+- **WhatsApp Web (codigo QR)**: no pide documentos del negocio. En **Conexiones > WhatsApp** pulsa *Vincular telefono* y
+  escanea el QR desde *Ajustes > Dispositivos vinculados*. **No es oficial**: usa un numero dedicado, no hagas envios masivos.
+- **API oficial de Meta**: la opcion estable y recomendada cuando tengas el negocio verificado.
+
+Puedes cambiar de canal en cualquier momento; las credenciales de la API oficial se conservan.
+
+## Estado del proyecto por fases
+
+| Fase | Estado |
+|---|---|
+| 0. Cimientos | Hecha (Motor, IA generica, panel, base de datos) |
+| 1. MVP Vendedor | Hecha (vendedora IA, pedidos borrador, aprobaciones, reglas de zona); falta conectar tus cuentas reales |
+| 2. Cobro y postventa | Parcial (Bre-B/Wompi y comprobantes listos; seguimiento de guias y rescate de devoluciones por hacer) |
+| 3. Finanzas | Parcial (rentabilidad por pedido y producto, fletes de Dropi; falta Meta Insights) |
+| 4. Cazador + Propuestas | Pendiente. Incluye integrar **Kalodata (MCP)** junto a DropKiller (ambos proveedores); hay 7 dias de prueba gratis |
+| 5. Landings, 6. Media Buyer, 7. Movil | Pendientes |
 
 ## Todo se configura desde el panel
 
@@ -51,6 +70,7 @@ motor/
 │   ├── rules/            # zonas/anticipos y rentabilidad con devoluciones (con pruebas)
 │   ├── convo/            # orquestador: agrupar mensajes, Yo tomo, comprobantes, eventos en vivo
 │   ├── whatsapp/         # WhatsApp Cloud API oficial + verificación de firma
+│   ├── whatsweb/         # WhatsApp Web (whatsmeow): vinculación por QR, envío y recepción
 │   ├── payments/         # Wompi: links de pago + verificación de eventos
 │   ├── store/            # SQLite (sin CGO, compila igual en Windows)
 │   └── api/              # API HTTP + panel web embebido

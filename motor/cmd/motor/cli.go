@@ -222,7 +222,11 @@ func (c *cli) estado() error {
 	} else {
 		c.p("%s IA: sin proveedor. Agrega uno: motor ia agregar --preset deepseek --clave -", mark(false))
 	}
-	c.p("%s WhatsApp: %s", mark(s.WhatsApp.Enabled()), map[bool]string{true: "conectado", false: "motor whatsapp configurar ..."}[s.WhatsApp.Enabled()])
+	if s.WhatsApp.UsesWeb() {
+		c.p("%s WhatsApp Web: vincula el telefono con el codigo QR desde el panel (Conexiones)", mark(false))
+	} else {
+		c.p("%s WhatsApp: %s", mark(s.WhatsApp.Enabled()), map[bool]string{true: "conectado", false: "motor whatsapp configurar ..."}[s.WhatsApp.Enabled()])
+	}
 	pagosOK := (n.Pagos.Metodo == "wompi" && s.Wompi.Enabled()) ||
 		(n.Pagos.Metodo == "manual" && (n.Pagos.Manual.LlaveBreB != "" || n.Pagos.Manual.NumeroCuenta != ""))
 	switch {
@@ -504,6 +508,7 @@ func (c *cli) whatsapp(args []string) error {
 	w := c.set.Get().WhatsApp
 	switch sub {
 	case "ver":
+		c.p("Canal:            %s", map[string]string{"cloud": "API oficial (Cloud API)", "web": "WhatsApp Web (QR, desde el panel)"}[w.Channel()])
 		c.p("Conectado:        %s", yesNo(w.Enabled()))
 		c.p("Token:            %s", maskOr(w.Token))
 		c.p("ID del telefono:  %s", w.PhoneNumberID)

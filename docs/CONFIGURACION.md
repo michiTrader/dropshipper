@@ -98,7 +98,38 @@ En zonas de riesgo el cliente paga un anticipo antes del despacho.
 
 ---
 
-## 5. Conectar WhatsApp (API oficial de Meta)
+## 5. Conectar WhatsApp
+
+El Motor ofrece **dos canales**. Se elige en **Conexiones > WhatsApp** y se puede cambiar cuando quieras (las
+credenciales de la API oficial se conservan al cambiar de canal):
+
+| Canal | Cuando usarlo | Ventajas | Riesgos |
+|---|---|---|---|
+| **WhatsApp Web (codigo QR)** | Aun no tienes los documentos del negocio que pide Meta | Funciona en minutos, sin token ni webhook ni direccion publica | **No es oficial**: WhatsApp puede restringir o bloquear el numero |
+| **API oficial de Meta** | Cuando tengas el negocio verificado | Estable, sin riesgo de bloqueo por el canal | Meta pide documentos del negocio para el token permanente |
+
+### 5.0 WhatsApp Web (codigo QR)
+
+1. En el panel: **Conexiones > WhatsApp** y elige **WhatsApp Web (codigo QR)**.
+2. Pulsa **Vincular telefono**: aparece un codigo QR que se renueva solo.
+3. En el telefono: **WhatsApp > Ajustes > Dispositivos vinculados > Vincular un dispositivo** y escanea el codigo.
+   (Alternativa: abre "Vincular con un codigo", escribe el numero con el codigo del pais, por ejemplo `573001234567`,
+   y en el telefono elige **Vincular con el numero de telefono** e ingresa el codigo de 8 caracteres.)
+4. Cuando el estado diga **Conectado**, la IA ya recibe y responde los mensajes de ese numero. Aparece en el telefono
+   como el dispositivo "Dropshipper Motor".
+
+Notas importantes:
+- La sesion se guarda en la carpeta de datos del Motor (`whatsapp_web.db`): no hace falta volver a escanear al reiniciar.
+  Haz copia de seguridad de esa carpeta como de cualquier dato sensible: quien la tenga controla el WhatsApp vinculado.
+- Si el telefono pasa unos 14 dias sin conexion, o cierras la sesion desde el telefono, el estado pasa a
+  **Sesion cerrada** y hay que vincular de nuevo.
+- Solo se atienden chats individuales (se ignoran grupos, estados y canales). Los comprobantes de pago (imagen o PDF)
+  se guardan igual que con la API oficial.
+- **Para reducir el riesgo de bloqueo:** usa un numero dedicado al negocio, responde solo a quien te escribe primero,
+  no hagas envios masivos ni escribas a desconocidos, y evita enviar muchos mensajes seguidos.
+- No necesitas direccion publica ni webhooks para este canal. Si luego pasas a la API oficial, sigue los pasos 5.1 a 5.4.
+
+## 5.1 a 5.4 API oficial de Meta
 
 > Usa un numero **dedicado**. Ese numero **no puede** estar al mismo tiempo en la app normal de WhatsApp o
 > WhatsApp Business. Si ya lo tienes instalado ahi, primero borra la cuenta de esa app.
@@ -129,7 +160,7 @@ Con ella, el panel te muestra las direcciones exactas de los webhooks para copia
 
 ### 5.3 Pegar los datos en el Motor
 
-**En el panel:** Conexiones > **WhatsApp Business**. Completa el token, el ID del numero y el secreto de la app.
+**En el panel:** Conexiones > **WhatsApp** > **API oficial de Meta**. Completa el token, el ID del numero y el secreto de la app.
 En **Token de verificacion** pulsa **Generar** (o inventa uno). Pulsa **Probar conexion** y luego **Guardar**.
 
 ### 5.4 Registrar el webhook en Meta

@@ -197,11 +197,101 @@ function drawDropi() {
 }
 
 // =============== WhatsApp ===============
+const WA_STATES = {
+  apagado: ['', 'Apagado'], sin_vincular: ['', 'Sin vincular'], esperando_qr: ['warn', 'Esperando escaneo'],
+  vinculando: ['warn', 'Vinculando'], conectando: ['warn', 'Conectando'], conectado: ['ok', 'Conectado'],
+  reconectando: ['warn', 'Reconectando'], sesion_cerrada: ['bad', 'Sesión cerrada'],
+};
+let waTimer = null;
+
 function drawWhatsApp() {
   const w = CN.cfg.whatsapp;
+  const web = w.canal === 'web';
+  const ok = web ? !!(CN.est && CN.est.whatsapp && CN.est.whatsapp.web && CN.est.whatsapp.web.vinculado) : w.configurado;
   $('#cnWA').innerHTML = `<div class="card">
-    <div class="card-head"><span class="ico">${ic('message', 18)}</span><div><h3>WhatsApp Business ${w.configurado ? '<span class="tag ok">Conectado</span>' : '<span class="tag">Sin conectar</span>'}</h3>
-      <div class="desc">API oficial de Meta (WhatsApp Cloud). Sin esto solo funciona el Simulador. Los pasos para obtener estos datos están en la guía de configuración.</div></div></div>
+    <div class="card-head"><span class="ico">${ic('message', 18)}</span><div><h3>WhatsApp ${ok ? '<span class="tag ok">Conectado</span>' : '<span class="tag">Sin conectar</span>'}</h3>
+      <div class="desc">Por aquí la IA recibe y responde a tus clientes. Elige cómo conectarla. Sin esto solo funciona el Simulador.</div></div></div>
+    <div class="field"><span style="font-size:12px;font-weight:600;color:var(--text-2)">Canal</span>
+      <div class="seg" id="waCanal"><button type="button" data-c="web" class="${web ? 'on' : ''}">WhatsApp Web (código QR)</button><button type="button" data-c="cloud" class="${web ? '' : 'on'}">API oficial de Meta</button></div></div>
+    <div id="waBody" style="margin-top:14px"></div></div>`;
+  $$('#waCanal button').forEach((b) => b.onclick = async () => {
+    if (b.classList.contains('on')) return;
+    try { await put('/api/ajustes/whatsapp/canal', { canal: b.dataset.c }); renderConexiones(); } catch (err) { toast(err.message, true); }
+  });
+  stopWAPoll();
+  if (web) drawWAWeb(); else drawWACloud();
+}
+
+function stopWAPoll() { if (waTimer) { clearInterval(waTimer); waTimer = null; } }
+
+// ----- WhatsApp Web (QR) -----
+async function drawWAWeb() {
+  const body = $('#waBody');
+  if (!body) return;
+  let inf;
+  try { inf = await api('/api/whatsapp/web/estado'); } catch (err) { body.innerHTML = `<div class="notice bad">${esc(err.message)}</div>`; return; }
+  CN.cfg.whatsapp_web = inf;
+  paintWAWeb(inf);
+  waTimer = setInterval(async () => {
+    if (!$('#waBody') || !$('#waWebBox')) { stopWAPoll(); return; }
+    try {
+      const n = await api('/api/whatsapp/web/estado');
+      if (n.estado !== CN.cfg.whatsapp_web.estado || n.qr !== CN.cfg.whatsapp_web.qr) { CN.cfg.whatsapp_web = n; paintWAWeb(n); }
+    } catch (_) { /* reintenta */ }
+  }, 2500);
+}
+
+function paintWAWeb(inf) {
+  const body = $('#waBody');
+  if (!body) return;
+  const [cls, label] = WA_STATES[inf.estado] || ['', inf.estado];
+  const linking = ['esperando_qr', 'vinculando'].includes(inf.estado);
+  let main = '';
+  if (inf.vinculado) {
+    main = `<div class="notice ok">${ic('check', 16)}<div><b>Teléfono vinculado${inf.numero ? ': +' + esc(inf.numero) : ''}</b>${inf.nombre ? ' (' + esc(inf.nombre) + ')' : ''}<br>La IA ya puede recibir y enviar mensajes por este número.</div></div>`;
+  } else if (linking && inf.qr) {
+    main = `<div class="qrbox"><img src="${inf.qr}" alt="Código QR para vincular WhatsApp" width="240" height="240">
+      <ol class="qrsteps"><li>Abre WhatsApp en el teléfono.</li><li>Entra en <b>Ajustes</b> y luego <b>Dispositivos vinculados</b>.</li><li>Toca <b>Vincular un dispositivo</b> y escanea este código.</li></ol>
+      <small class="muted">El código se renueva solo cada pocos segundos.</small></div>`;
+  } else if (inf.estado === 'vinculando') {
+    main = `<div class="notice info">${ic('refresh', 16)}<div>Vinculando, un momento...</div></div>`;
+  } else if (inf.estado === 'sesion_cerrada') {
+    main = `<div class="notice bad">${ic('alert', 16)}<div>La sesión se cerró desde el teléfono. Vincula de nuevo para seguir.</div></div>`;
+  } else {
+    main = `<div class="notice info">${ic('info', 16)}<div>Aún no hay ningún teléfono vinculado. Pulsa <b>Vincular teléfono</b> para generar el código QR.</div></div>`;
+  }
+  body.innerHTML = `<div id="waWebBox">
+    <div class="row" style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><span class="tag ${cls}">${esc(label)}</span>${inf.error ? `<small class="muted">${esc(inf.error)}</small>` : ''}</div>
+    ${main}
+    <div class="notice warn" style="margin-top:10px">${ic('alert', 16)}<div><b>Conexión no oficial.</b> WhatsApp Web no es la API de Meta y WhatsApp puede restringir números que envían muchos mensajes o a desconocidos. Usa un número dedicado al negocio, responde solo a quien te escribe y no hagas envíos masivos. Si el teléfono pasa unos 14 días sin conexión, la sesión se cierra.</div></div>
+    ${!inf.vinculado ? `<details class="subcard" style="margin-top:10px"><summary>Vincular con un código en lugar del QR</summary>
+      <div class="inline" style="margin-top:8px"><input id="waPhone" placeholder="Número con país, ej.: 573001234567" inputmode="numeric"><button class="btn" type="button" id="waCodeBtn">Obtener código</button></div>
+      <div id="waCodeOut" style="margin-top:8px"></div></details>` : ''}
+    <div class="form-actions"><span class="spacer"></span>
+      ${inf.vinculado || inf.estado === 'sesion_cerrada' ? '<button class="btn danger" type="button" id="waUnlink">Desvincular</button>' : ''}
+      ${inf.vinculado ? '' : `<button class="btn primary" type="button" id="waLink">${ic('message', 14)} ${linking ? 'Generar otro código' : 'Vincular teléfono'}</button>`}</div></div>`;
+  const link = $('#waLink');
+  if (link) link.onclick = (e) => busy(e.currentTarget, async () => {
+    try { CN.cfg.whatsapp_web = await post('/api/whatsapp/web/vincular', {}); paintWAWeb(CN.cfg.whatsapp_web); } catch (err) { toast(err.message, true); }
+  });
+  const cb = $('#waCodeBtn');
+  if (cb) cb.onclick = (e) => busy(e.currentTarget, async () => {
+    try {
+      const r = await post('/api/whatsapp/web/codigo', { telefono: $('#waPhone').value });
+      $('#waCodeOut').innerHTML = `<div class="notice ok">${ic('check', 16)}<div>En el teléfono: Ajustes, Dispositivos vinculados, Vincular, <b>Vincular con el número de teléfono</b>, y escribe este código:<br><b style="font-size:20px;letter-spacing:3px">${esc(r.codigo)}</b></div></div>`;
+    } catch (err) { toast(err.message, true); }
+  });
+  const un = $('#waUnlink');
+  if (un) un.onclick = async () => {
+    if (!confirm('¿Desvincular el teléfono? La IA dejará de recibir y enviar mensajes por WhatsApp.')) return;
+    try { await post('/api/whatsapp/web/desvincular', {}); toast('Teléfono desvinculado.'); renderConexiones(); } catch (err) { toast(err.message, true); }
+  };
+}
+
+// ----- API oficial de Meta (Cloud) -----
+function drawWACloud() {
+  const w = CN.cfg.whatsapp;
+  $('#waBody').innerHTML = `<div class="notice info" style="margin-bottom:10px">${ic('info', 16)}<div>API oficial de Meta (WhatsApp Cloud). Es la opción más estable, pero Meta pide documentos del negocio para dar el token permanente. Los pasos están en la guía de configuración.</div></div>
     <form id="waForm" autocomplete="off">
       <div class="fgrid">
         ${secretField('token', 'Token de acceso permanente', w.token, { ph: 'EAAG...', help: 'Se crea en Meta for Developers, con un usuario del sistema.' })}
@@ -216,7 +306,7 @@ function drawWhatsApp() {
       <div class="testres" id="waTest"></div>
       <div class="form-actions"><button class="btn" type="button" id="waTestBtn">${ic('refresh', 14)} Probar conexión</button><span class="spacer"></span>
         ${w.configurado ? '<button class="btn danger" type="button" id="waDel">Desconectar</button>' : ''}<button class="btn primary" type="submit">Guardar</button></div>
-    </form></div>`;
+    </form>`;
   const f = $('#waForm');
   $('#waGen').onclick = () => { f.verify_token.type = 'text'; f.verify_token.value = randHex(12); toast('Token generado. Guarda y cópialo en Meta.'); };
   $('#waTestBtn').onclick = (e) => busy(e.currentTarget, async () => showTest($('#waTest'), await post('/api/whatsapp/probar', formData(f))));

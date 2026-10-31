@@ -240,6 +240,7 @@ function onEvent(ev) {
   if (ev.phone && ev.phone === S.chatPhone && S.view === 'chats') window.loadChatMessages();
   if (ev.phone && ev.phone === S.simPhone && S.view === 'simulador') window.loadSimMessages();
   if (ev.type === 'alerta' && ev.text) toast(ev.text);
+  if (ev.type === 'whatsapp') { refreshBadges(); return; }
   if (ev.type !== 'escribiendo') scheduleRefresh();
 }
 
@@ -267,8 +268,9 @@ function setupSteps(st) {
       desc: st.dropi && st.dropi.conectado ? 'Conectado: el Motor cotiza fletes reales y compara transportadoras' : 'Pega tu token de Dropi en Conexiones para cotizar fletes reales y traer los costos de tus productos.', go: 'conexiones' },
     { done: pg.listo, required: true, title: 'Definir cómo cobrar los anticipos',
       desc: pg.listo ? (pg.metodo === 'wompi' ? 'Wompi con confirmación automática' : 'Pago manual con comprobante') : 'Llave Bre-B o cuenta bancaria, o llaves de Wompi.', go: 'conexiones' },
-    { done: wa.configurado, required: true, title: 'Conectar WhatsApp Business',
-      desc: wa.configurado ? 'Conectado a la API oficial de Meta' : 'Sin esto solo funciona el Simulador. Necesitas token y número de teléfono de Meta.', go: 'conexiones' },
+    { done: wa.configurado, required: true, title: 'Conectar WhatsApp',
+      desc: wa.configurado ? (wa.canal === 'web' ? 'Conectado por WhatsApp Web' + (wa.web && wa.web.numero ? ' (+' + wa.web.numero + ')' : '') : 'Conectado a la API oficial de Meta')
+        : 'Sin esto solo funciona el Simulador. Vincula tu teléfono con un código QR (WhatsApp Web) o usa la API oficial de Meta.', go: 'conexiones' },
     { done: st.requiere_token, required: false, title: 'Proteger el panel con un token',
       desc: st.requiere_token ? 'El panel pide token' : 'Imprescindible antes de publicar el Motor en internet.', go: 'conexiones' },
   ];
