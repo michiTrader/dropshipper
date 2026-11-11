@@ -11,6 +11,7 @@ package dropi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,6 +53,9 @@ func New(token string, sandbox bool) *Client {
 type APIError struct {
 	Status int
 	Body   string
+	// IP is the address Dropi says it saw the request come from (it reports it
+	// in rejections); useful because tokens can be tied to allowed IPs.
+	IP string
 }
 
 func (e *APIError) Error() string { return fmt.Sprintf("Dropi HTTP %d: %s", e.Status, e.Body) }
@@ -86,7 +90,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte,
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return raw, &APIError{Status: resp.StatusCode, Body: snippet(raw)}
+		return raw, &APIError{Status: resp.StatusCode, Body: snippet(raw), IP: seenIP(raw)}
 	}
 	// Dropi sometimes answers 200 with {"isSuccess":false,"message":"..."}.
 	var env struct {
@@ -98,9 +102,78 @@ func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte,
 		if strings.Contains(strings.ToLower(env.Message), "denied") {
 			st = http.StatusUnauthorized
 		}
-		return raw, &APIError{Status: st, Body: env.Message}
+		return raw, &APIError{Status: st, Body: env.Message, IP: seenIP(raw)}
 	}
 	return raw, nil
+}
+
+// seenIP reads the "ip" Dropi echoes in its error answers ("" if absent).
+func seenIP(raw []byte) string {
+	var v struct {
+		IP string `json:"ip"`
+	}
+	if json.Unmarshal(raw, &v) != nil {
+		return ""
+	}
+	return strings.TrimSpace(v.IP)
+}
+
+// TokenInfo is what an integration token says about itself. Dropi tokens are
+// JWTs whose payload (readable by anyone, never the signature) states the
+// integration type and, for some types, the IPs/hosts allowed to use it.
+type TokenInfo struct {
+	Type         string
+	AllowedIPs   []string
+	AllowedHosts []string
+}
+
+// Restricted reports whether the token can only be used from certain places.
+func (t TokenInfo) Restricted() bool { return len(t.AllowedIPs)+len(t.AllowedHosts) > 0 }
+
+// AllowsIP reports whether ip is in the allowed list (true when unrestricted).
+func (t TokenInfo) AllowsIP(ip string) bool {
+	if len(t.AllowedIPs) == 0 {
+		return len(t.AllowedHosts) == 0
+	}
+	for _, a := range t.AllowedIPs {
+		if a == strings.TrimSpace(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseToken decodes the public payload of a Dropi token locally; nothing is
+// sent anywhere. ok is false when the token does not look like a JWT.
+func ParseToken(token string) (TokenInfo, bool) {
+	parts := strings.Split(strings.TrimSpace(token), ".")
+	if len(parts) != 3 {
+		return TokenInfo{}, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return TokenInfo{}, false
+	}
+	var p struct {
+		Type string `json:"integration_type"`
+		List []struct {
+			URL *string `json:"url"`
+			IP  *string `json:"ip"`
+		} `json:"ip_url"`
+	}
+	if json.Unmarshal(raw, &p) != nil {
+		return TokenInfo{}, false
+	}
+	info := TokenInfo{Type: p.Type}
+	for _, e := range p.List {
+		if e.IP != nil && strings.TrimSpace(*e.IP) != "" {
+			info.AllowedIPs = append(info.AllowedIPs, strings.TrimSpace(*e.IP))
+		}
+		if e.URL != nil && strings.TrimSpace(*e.URL) != "" {
+			info.AllowedHosts = append(info.AllowedHosts, strings.TrimSpace(*e.URL))
+		}
+	}
+	return info, true
 }
 
 func snippet(b []byte) string {

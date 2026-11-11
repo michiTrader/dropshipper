@@ -292,6 +292,20 @@ Todo esto se hace desde el panel; no hay que usar la terminal.
 
 Para desconectar, pulsa **Desconectar** en la misma tarjeta. Los fletes vuelven a ser los estimados.
 
+### Si Dropi dice "Access denied" con un token que parece correcto
+
+Dropi responde **lo mismo** ("Access denied") cuando el token esta mal copiado y cuando el token existe pero **solo
+puede usarse desde ciertas IPs**. Al crear una integracion en Dropi > Mis Integraciones, el **tipo** que eliges
+(APIFY, KOSTA, Easy Bot, DropPage...) puede dejar el token atado a las IPs de esa plataforma, y no hay un tipo generico.
+
+**Probar conexion** ahora lee el token (solo localmente, sin enviarlo a ningun lado) y te dice: el tipo, desde que IPs
+o dominios se permite y que IP vio Dropi en tu conexion. Si tu IP no esta en la lista:
+
+1. Crea otra integracion con **otro tipo** de la lista, guarda, copia el token nuevo y vuelve a probar. Un token sin
+   lista de IPs funciona desde cualquier lugar.
+2. Si todos los tipos limitan la IP, escribe al soporte de Dropi pidiendo autorizar tu IP o un token para
+   "integracion propia por API". Si tu IP de casa cambia, lo estable es correr el Motor en un servidor con IP fija.
+
 ### Aprobar crea la orden en Dropi
 
 Con Dropi conectado (entorno real, no el de pruebas) y **Crear los pedidos aprobados directamente en Dropi** encendido:

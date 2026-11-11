@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -235,5 +236,24 @@ func TestSyncAllSkipsProductsWithoutDropiID(t *testing.T) {
 	}
 	if n := e.srv.SyncAll(t.Context()); n != 1 {
 		t.Fatalf("debía actualizar 1 producto: %d", n)
+	}
+}
+
+func TestDropiAdviceExplainsIPRestrictedToken(t *testing.T) {
+	payload := `{"integration_type":"APIFY","ip_url":[{"url":"tambora.co","ip":null},{"url":null,"ip":"67.23.253.250"}]}`
+	tok := "x." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".y"
+	err := &dropi.APIError{Status: 401, Body: "Access denied", IP: "181.134.155.66"}
+	msg := dropiAdviceTok(err, tok)
+	for _, want := range []string{"181.134.155.66", "APIFY", "67.23.253.250", "tambora.co", "Tu IP no está en esa lista"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("falta %q en: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, tok) {
+		t.Fatal("el mensaje nunca debe repetir el token")
+	}
+	// Unrestricted/unknown token: generic advice, still shows the IP.
+	if m := dropiAdviceTok(err, "abc"); !strings.Contains(m, "181.134.155.66") || strings.Contains(m, "Tu IP no está") {
+		t.Fatalf("consejo genérico: %s", m)
 	}
 }

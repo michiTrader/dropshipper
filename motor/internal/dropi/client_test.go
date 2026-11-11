@@ -2,6 +2,7 @@ package dropi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -145,4 +146,38 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestParseTokenReadsAllowedIPsAndType(t *testing.T) {
+	// Payload only (no real signature): type APIFY tied to one host and one IP.
+	payload := `{"integration_type":"APIFY","ip_url":[{"url":"tambora.co","ip":null},{"url":null,"ip":"67.23.253.250"}]}`
+	tok := "x." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".y"
+	info, ok := ParseToken(tok)
+	if !ok || info.Type != "APIFY" || !info.Restricted() {
+		t.Fatalf("%+v ok=%v", info, ok)
+	}
+	if info.AllowsIP("181.134.155.66") || !info.AllowsIP("67.23.253.250") {
+		t.Fatalf("lista de IPs mal interpretada: %+v", info)
+	}
+	free, _ := ParseToken("x." + base64.RawURLEncoding.EncodeToString([]byte(`{"integration_type":"OTRO","ip_url":[]}`)) + ".y")
+	if free.Restricted() || !free.AllowsIP("1.2.3.4") {
+		t.Fatalf("un token sin lista no está restringido: %+v", free)
+	}
+	if _, ok := ParseToken("no-es-un-jwt"); ok {
+		t.Fatal("un texto cualquiera no es un token")
+	}
+}
+
+func TestRejectionCarriesTheIPDropiSaw(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		_, _ = w.Write([]byte(`{"isSuccess":false,"message":"Access denied","status":401,"ip":"181.134.155.66"}`))
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, Token: "x", HTTP: srv.Client()}
+	_, err := c.Ping(context.Background())
+	ae, ok := err.(*APIError)
+	if !ok || !ae.IsAuth() || ae.IP != "181.134.155.66" {
+		t.Fatalf("debía traer la IP que vio Dropi: %#v", err)
+	}
 }
