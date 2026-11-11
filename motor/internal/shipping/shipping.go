@@ -360,6 +360,46 @@ func (s *Service) fallback(n config.Negocio, sc Scenario) []carrierFreight {
 	return out
 }
 
+// ReferenceCities are the destinations used to estimate a typical freight for a
+// product from REAL Dropi quotes (department, city).
+var ReferenceCities = [][2]string{
+	{"Cundinamarca", "Bogotá"}, {"Antioquia", "Medellín"}, {"Valle del Cauca", "Cali"},
+	{"Atlántico", "Barranquilla"}, {"Santander", "Bucaramanga"},
+}
+
+// ReferenceFreight asks Dropi for the freight to the main cities and returns
+// the average of the cheapest active carrier in each (rounded to $100) and how
+// many cities answered. It never falls back to an estimate: when Dropi cannot
+// quote, it returns 0 and the reason, so nothing is marked as confirmed.
+func (s *Service) ReferenceFreight(ctx context.Context, price int64) (int64, int, string) {
+	n := s.neg()
+	var total int64
+	count := 0
+	reason := ""
+	for _, c := range ReferenceCities {
+		fs, warn := s.freights(ctx, n, Scenario{Department: c[0], City: c[1], Price: price, Policy: rules.PayCOD, Risk: rules.RiskNormal})
+		if len(fs) == 0 {
+			if reason == "" {
+				reason = warn
+			}
+			continue
+		}
+		low := fs[0].freight
+		for _, f := range fs {
+			if f.freight < low {
+				low = f.freight
+			}
+		}
+		total += low
+		count++
+	}
+	if count == 0 {
+		return 0, 0, reason
+	}
+	avg := total / int64(count)
+	return (avg + 50) / 100 * 100, count, ""
+}
+
 // Clear drops cached quotes (after changing the origin or the token).
 func (s *Service) Clear() {
 	s.mu.Lock()

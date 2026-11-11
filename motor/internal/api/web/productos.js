@@ -12,6 +12,13 @@ const blankProduct = () => ({
   dolores: [], beneficios: [], objeciones: [], activo: false,
 });
 
+// Etiquetas de "real vs sin confirmar" para costo y flete de un producto.
+function realTags(p) {
+  const cost = p.costo_confirmado ? '' : '<span class="tag warn" title="El costo lo escribiste tú. Con el ID de Dropi se trae el real.">Costo sin confirmar</span>';
+  const fr = p.flete_confirmado ? '' : '<span class="tag warn" title="El flete lo escribiste tú. Con Dropi conectado y el ID del producto se calcula con cotizaciones reales.">Flete sin confirmar</span>';
+  return cost + fr;
+}
+
 function renderProductos(arg) {
   const root = $('#productos');
   if (!arg) return renderProductList(root);
@@ -37,7 +44,7 @@ async function renderProductList(root) {
 function productCard(p) {
   return `<div class="card pcard ${p.activo ? '' : 'off'}" data-sku="${esc(p.sku)}">
     <div class="top"><div><div class="nm">${esc(p.nombre)}</div><div class="sku">${esc(p.sku)}${p.categoria ? ' · ' + esc(p.categoria) : ''}</div></div>
-      <div class="row gap wrap" style="justify-content:flex-end">${p.activo ? '<span class="tag ok">Activo</span>' : '<span class="tag">Inactivo</span>'}${p.costo_confirmado ? '' : '<span class="tag warn">Costo sin confirmar</span>'}</div></div>
+      <div class="row gap wrap" style="justify-content:flex-end">${p.activo ? '<span class="tag ok">Activo</span>' : '<span class="tag">Inactivo</span>'}${realTags(p)}</div></div>
     <div class="stats">
       <div><b>${p.precio_desde ? cop(p.precio_desde) : '-'}</b><span>Precio desde</span></div>
       <div><b class="${p.ganancia_esperada_mejor < 0 ? 'neg' : ''}">${p.ofertas ? cop(p.ganancia_esperada_mejor) : '-'}</b><span>Mejor ganancia esperada</span></div>
@@ -83,7 +90,7 @@ function drawProduct(root) {
   const title = PS.isNew ? 'Nuevo producto' : p.nombre;
   root.innerHTML = `
     <div class="crumbs"><a href="#productos">Productos</a> / ${esc(title)}</div>
-    <div class="view-head"><div><h2>${esc(title)}</h2>${PS.isNew ? '' : `<div class="sub"><code>${esc(p.sku)}</code> ${p.activo ? '<span class="tag ok">Activo</span>' : '<span class="tag">Inactivo</span>'} ${p.costo_confirmado ? '' : '<span class="tag warn">Costo sin confirmar</span>'}</div>`}</div>
+    <div class="view-head"><div><h2>${esc(title)}</h2>${PS.isNew ? '' : `<div class="sub"><code>${esc(p.sku)}</code> ${p.activo ? '<span class="tag ok">Activo</span>' : '<span class="tag">Inactivo</span>'} ${realTags(p)}</div>`}</div>
       <span class="spacer"></span>
       ${PS.isNew ? '' : `<button class="btn ${p.activo ? '' : 'ok'}" id="pToggle">${p.activo ? 'Desactivar' : 'Activar para vender'}</button><button class="btn danger" id="pDelete">${ic('trash', 14)} Borrar</button>`}
       <button class="btn primary" id="pSave">${PS.isNew ? 'Crear producto' : 'Guardar cambios'}</button></div>
@@ -116,8 +123,8 @@ function drawProduct(root) {
       <div class="card"><div class="card-head"><div><h3>Costos con el proveedor</h3><div class="desc">Con esto se calcula cuánto ganas realmente por cada venta.</div></div></div>
         <div class="fgrid">
           <label class="field"><span>Costo del producto (COP, por unidad)</span><input data-f="costo_proveedor" type="number" min="0" step="100" value="${p.costo_proveedor || 0}"></label>
-          <label class="field"><span>Flete estimado (COP, por envío)</span><input data-f="flete_estimado" type="number" min="0" step="100" value="${p.flete_estimado || 0}"></label>
-          <label class="field"><span>ID del producto en Dropi (opcional)</span><div class="inline"><input data-f="dropi_product_id" value="${esc(p.dropi_product_id)}"><button class="btn" type="button" id="pPullCost" ${PS.isNew ? 'disabled title="Guarda el producto primero"' : ''}>${ic('refresh', 14)} Traer costos de Dropi</button></div><small>Con el ID, el Motor copia el costo real desde Dropi y lo marca como confirmado. Requiere Dropi conectado en Conexiones.</small></label>
+          <label class="field"><span>Flete (COP, por envío) ${p.flete_confirmado ? '<span class="tag ok">Real de Dropi</span>' : '<span class="tag warn">Estimado</span>'}</span><input data-f="flete_estimado" type="number" min="0" step="100" value="${p.flete_estimado || 0}"><small>${p.flete_confirmado ? 'Promedio del flete más barato cotizado por Dropi hacia las ciudades principales. Si lo cambias a mano vuelve a ser un estimado.' : 'Estimado. Se reemplaza solo por el real al poner el ID de Dropi.'}</small></label>
+          <label class="field"><span>ID del producto en Dropi (opcional)</span><div class="inline"><input data-f="dropi_product_id" value="${esc(p.dropi_product_id)}"><button class="btn" type="button" id="pPullCost" ${PS.isNew ? 'disabled title="Guarda el producto primero"' : ''}>${ic('refresh', 14)} Actualizar desde Dropi</button></div><small>Con el ID, el Motor copia solo el costo y el flete reales desde Dropi (al guardar, al conectar Dropi y cada 6 horas) y los marca como confirmados. Requiere Dropi conectado en Conexiones.${p.dropi_sincronizado ? ` Última lectura de Dropi: ${esc(fmtTime(p.dropi_sincronizado))}.` : ''}</small></label>
           <label class="switch" style="align-self:end"><input data-f="costo_confirmado" type="checkbox" ${p.costo_confirmado ? 'checked' : ''}><div><b>Costo confirmado</b><span>Márcalo cuando el proveedor confirmó costo y flete.</span></div></label>
         </div></div>
       <div class="card" style="margin-top:14px"><div class="card-head"><div><h3>Ofertas</h3><div class="desc">Combos que la IA puede ofrecer. Marca como principal la que debe recomendar primero.</div></div></div>
@@ -199,7 +206,8 @@ function bindProduct(root) {
       const idv = $('[data-f="dropi_product_id"]').value.trim();
       if (idv !== (PS.p.dropi_product_id || '')) await saveProduct();
       const r = await post('/api/productos/' + encodeURIComponent(PS.sku) + '/costos-dropi');
-      toast(`Costo traído de Dropi: ${cop(r.costo)} por unidad (antes ${cop(r.costo_anterior)}). Ya está confirmado.`);
+      toast(`Costo real de Dropi: ${cop(r.costo)} por unidad (antes ${cop(r.costo_anterior)}). ` +
+        (r.flete_aviso ? `El flete sigue estimado: ${r.flete_aviso}` : `Flete real: ${cop(r.flete)} (antes ${cop(r.flete_anterior)}).`), !!r.flete_aviso);
       await openProduct($('#productos'), PS.sku);
     } catch (err) { toast(err.message, true); }
   });
@@ -227,8 +235,10 @@ async function saveProduct() {
       toast('Producto creado. Actívalo cuando esté listo para vender.');
       location.hash = 'productos/' + encodeURIComponent(r.sku);
     } else {
-      await put('/api/productos/' + encodeURIComponent(PS.sku), p);
-      toast('Cambios guardados.');
+      const r = await put('/api/productos/' + encodeURIComponent(PS.sku), p);
+      if (r.dropi) toast(`Guardado. Costo y flete reales traídos de Dropi: costo ${cop(r.dropi.costo)}, flete ${cop(r.dropi.flete)}.` + (r.dropi.flete_aviso ? ' El flete sigue estimado: ' + r.dropi.flete_aviso : ''), !!r.dropi.flete_aviso);
+      else if (r.dropi_aviso) toast('Guardado, pero no se pudo leer Dropi: ' + r.dropi_aviso, true);
+      else toast('Cambios guardados.');
       await openProduct($('#productos'), PS.sku);
     }
   } catch (err) { toast(err.message, true); }
@@ -266,7 +276,7 @@ function drawEconomics(eco, sup) {
       </dl>
       ${o.contraentrega.advertencia ? `<div class="small" style="color:var(--warn)">${ic('alert', 13)} ${esc(o.contraentrega.advertencia)}</div>` : ''}</div>`).join('');
   box.innerHTML = `
-    ${PS.p && PS.p.costo_confirmado ? '' : notice('warn', 'El costo y el flete aún no están confirmados con el proveedor, así que estas cifras son estimadas.')}
+    ${PS.p && PS.p.costo_confirmado && PS.p.flete_confirmado ? notice('ok', 'Costo y flete reales, leídos de Dropi.') : notice('warn', `${PS.p && PS.p.costo_confirmado ? '' : 'El costo no está confirmado. '}${PS.p && PS.p.flete_confirmado ? '' : 'El flete es un estimado. '}Estas cifras son aproximadas hasta que pongas el ID de Dropi del producto (pestaña Ofertas y costos) con Dropi conectado en modo real.`)}
     <div class="card" style="margin-bottom:14px"><div class="card-head"><div><h3>Supuestos del negocio</h3><div class="desc">Aplican a todos los productos. Se cambian en <a href="#ajustes">Ajustes</a>.</div></div></div>
       <div class="kpis"><div class="kpi"><div class="l">Devoluciones esperadas</div><div class="v">${pct(sup.tasa_devolucion)}</div></div>
       <div class="kpi"><div class="l">Margen de seguridad</div><div class="v">${pct(sup.margen_seguridad)}</div></div>
