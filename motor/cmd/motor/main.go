@@ -189,6 +189,42 @@ func serve(dir string, lg *log.Logger) error {
 		}
 	}()
 
+	// Real cost and freight from Dropi, without the owner pressing anything:
+	// shortly after start, whenever Dropi is (re)connected, and every 6 hours.
+	syncDropi := func() {
+		sctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		defer cancel()
+		if n := srv.SyncAll(sctx); n > 0 {
+			lg.Printf("Dropi: costo y flete reales actualizados en %d producto(s)", n)
+		}
+	}
+	var lastDropiKey string
+	a.set.OnChange(func(s settings.Settings) {
+		key := ""
+		if s.Dropi.Enabled() {
+			key = fmt.Sprintf("%s|%v|%s|%s", s.Dropi.Token, s.Dropi.Sandbox, s.Dropi.OriginDept, s.Dropi.OriginCity)
+		}
+		if key == lastDropiKey {
+			return
+		}
+		lastDropiKey = key
+		if key != "" {
+			go func() { time.Sleep(2 * time.Second); syncDropi() }()
+		}
+	})
+	go func() {
+		t := time.NewTicker(6 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				syncDropi()
+			}
+		}
+	}()
+
 	printBanner(lg, a, h, cfg.Port)
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()

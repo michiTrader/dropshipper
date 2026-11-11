@@ -6,15 +6,18 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/michiTrader/dropshipper/motor/internal/catalog"
 	"github.com/michiTrader/dropshipper/motor/internal/config"
+	"github.com/michiTrader/dropshipper/motor/internal/convo"
 	"github.com/michiTrader/dropshipper/motor/internal/dropi"
 	"github.com/michiTrader/dropshipper/motor/internal/geo"
 	"github.com/michiTrader/dropshipper/motor/internal/hub"
 	"github.com/michiTrader/dropshipper/motor/internal/rules"
 	"github.com/michiTrader/dropshipper/motor/internal/settings"
 	"github.com/michiTrader/dropshipper/motor/internal/shipping"
+	"github.com/michiTrader/dropshipper/motor/internal/store"
 )
 
 func (s *Server) dropiRoutes(api *http.ServeMux) {
@@ -364,41 +367,116 @@ func max1(v int) int {
 // pullDropiCosts copies the supplier cost from Dropi into the product and marks
 // it as confirmed.
 func (s *Server) pullDropiCosts(w http.ResponseWriter, r *http.Request) {
-	out, err := s.PullCosts(r.Context(), r.PathValue("sku"))
+	out, err := s.SyncProduct(r.Context(), r.PathValue("sku"))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, out)
+	writeJSON(w, 200, map[string]any{"ok": true, "costo_anterior": out.PrevCost, "costo": out.Cost, "flete_anterior": out.PrevFreight,
+		"flete": out.Freight, "flete_ciudades": out.FreightCities, "flete_aviso": out.FreightWarn, "nombre_dropi": out.Name, "stock": out.Stock})
 }
 
-// PullCosts copies the supplier cost from Dropi into the product and marks it
-// as confirmed.
-func (s *Server) PullCosts(ctx context.Context, sku string) (map[string]any, error) {
+// SyncResult is what a Dropi sync changed in a product.
+type SyncResult struct {
+	Cost          int64  `json:"costo"`
+	PrevCost      int64  `json:"costo_anterior"`
+	Freight       int64  `json:"flete"`
+	PrevFreight   int64  `json:"flete_anterior"`
+	FreightCities int    `json:"flete_ciudades"`
+	FreightWarn   string `json:"flete_aviso,omitempty"`
+	Name          string `json:"nombre_dropi"`
+	Stock         int64  `json:"stock"`
+}
+
+// SyncProduct copies the REAL supplier cost and a typical freight (average of
+// the cheapest real quote to the main cities) from Dropi into the product and
+// marks them as confirmed. If Dropi cannot quote the freight, the cost is still
+// confirmed but the freight stays an estimate (and the result says why).
+func (s *Server) SyncProduct(ctx context.Context, sku string) (SyncResult, error) {
+	var res SyncResult
 	p, ok := s.Catalog.Get(sku)
 	if !ok {
-		return nil, errors.New("el producto no existe")
+		return res, errors.New("el producto no existe")
 	}
 	client := s.Hub.Dropi()
 	if client == nil {
-		return nil, errors.New("conecta Dropi primero (Conexiones > Dropi)")
+		return res, errors.New("conecta Dropi primero (Conexiones > Dropi)")
 	}
 	if strings.TrimSpace(p.DropiProductID) == "" {
-		return nil, errors.New("el producto no tiene ID de Dropi; escríbelo en la ficha del producto")
+		return res, errors.New("el producto no tiene ID de Dropi; escríbelo en la ficha del producto")
 	}
-	cctx, cancel := context.WithTimeout(ctx, hub.TestTimeout)
+	cctx, cancel := context.WithTimeout(ctx, 2*hub.TestTimeout)
 	defer cancel()
 	dp, err := client.Product(cctx, p.DropiProductID)
 	if err != nil {
-		return nil, errors.New(dropiAdvice(err))
+		return res, errors.New(dropiAdvice(err))
 	}
 	if dp.Cost <= 0 {
-		return nil, errors.New("Dropi no devolvió un costo para ese producto")
+		return res, errors.New("Dropi no devolvió un costo para ese producto")
 	}
-	before := p.UnitCost
+	res = SyncResult{Cost: dp.Cost, PrevCost: p.UnitCost, PrevFreight: p.Freight, Freight: p.Freight, Name: dp.Name, Stock: dp.Stock}
 	p.UnitCost, p.CostConfirmed = dp.Cost, true
+
+	if s.Shipping != nil && len(p.Offers) > 0 {
+		offer := p.Offers[0]
+		for _, o := range p.Offers {
+			if o.Highlight {
+				offer = o
+			}
+		}
+		f, n, why := s.Shipping.ReferenceFreight(cctx, offer.Price)
+		if n > 0 {
+			p.Freight, p.FreightConfirmed = f, true
+			res.Freight, res.FreightCities = f, n
+		} else {
+			p.FreightConfirmed = false
+			res.FreightWarn = why
+			if res.FreightWarn == "" {
+				res.FreightWarn = "Dropi no cotizó el flete (revisa que no estés en el entorno de pruebas y que la ciudad de origen esté configurada)."
+			}
+		}
+	}
+	p.DropiSyncedAt = time.Now().UTC().Format(time.RFC3339)
 	if _, err := s.Catalog.Save(ctx, p); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+// PullCosts is kept for the terminal command: it syncs cost (and freight).
+func (s *Server) PullCosts(ctx context.Context, sku string) (map[string]any, error) {
+	r, err := s.SyncProduct(ctx, sku)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"ok": true, "costo_anterior": before, "costo": dp.Cost, "nombre_dropi": dp.Name, "stock": dp.Stock}, nil
+	return map[string]any{"ok": true, "costo_anterior": r.PrevCost, "costo": r.Cost, "flete_anterior": r.PrevFreight, "flete": r.Freight,
+		"flete_ciudades": r.FreightCities, "flete_aviso": r.FreightWarn, "nombre_dropi": r.Name, "stock": r.Stock}, nil
+}
+
+// SyncAll refreshes every product that has a Dropi ID. Returns how many were
+// updated; failures raise one alert (not one per product) so the owner knows
+// the numbers may be stale.
+func (s *Server) SyncAll(ctx context.Context) (updated int) {
+	if s.Hub == nil || s.Hub.Dropi() == nil {
+		return 0
+	}
+	var failed []string
+	for _, p := range s.Catalog.List() {
+		if strings.TrimSpace(p.DropiProductID) == "" {
+			continue
+		}
+		if _, err := s.SyncProduct(ctx, p.SKU); err != nil {
+			failed = append(failed, p.SKU+": "+err.Error())
+			continue
+		}
+		updated++
+	}
+	if len(failed) > 0 && s.Store != nil {
+		_, _ = s.Store.AddAlert(ctx, store.Alert{Kind: store.AlertInfo,
+			Message: "No se pudo actualizar desde Dropi el costo y flete de: " + strings.Join(failed, "; ")})
+	}
+	if updated > 0 && s.Engine != nil {
+		s.Engine.Events.Publish(convo.Event{Type: "producto"})
+	}
+	return updated
 }

@@ -163,3 +163,77 @@ func TestPullDropiCosts(t *testing.T) {
 		t.Fatalf("el costo debe quedar confirmado: %+v", got)
 	}
 }
+
+// With a Dropi ID, saving the product copies the REAL cost and a real freight
+// (average of the cheapest quote to the main cities) without pressing anything.
+func TestSaveProductSyncsRealCostAndFreight(t *testing.T) {
+	fakeDropi(t, "tok-dropi-123456")
+	e := newEnv(t, "")
+	connectDropi(t, e, "tok-dropi-123456")
+	sku := e.cat.Default().SKU
+
+	p := e.cat.Default()
+	if p.FreightConfirmed {
+		t.Fatal("el flete de la ficha inicial es un estimado")
+	}
+	p.DropiProductID = "555"
+	r := e.do("PUT", "/api/productos/"+sku, p)
+	if r.Code != 200 {
+		t.Fatalf("guardar: %d %s", r.Code, r.Body)
+	}
+	got, _ := e.cat.Get(sku)
+	// fakeDropi quotes COORDINADORA 19000 / ENVIA 14000 for every route: cheapest = 14000.
+	if got.UnitCost != 27000 || !got.CostConfirmed || got.Freight != 14000 || !got.FreightConfirmed || got.DropiSyncedAt == "" {
+		t.Fatalf("debía traer costo y flete reales: %+v", got)
+	}
+
+	// Typing another freight by hand makes it an estimate again.
+	got.Freight = 20000
+	if r := e.do("PUT", "/api/productos/"+sku, got); r.Code != 200 {
+		t.Fatalf("guardar 2: %d %s", r.Code, r.Body)
+	}
+	// ...and the next save with a Dropi ID refreshes it from Dropi.
+	again, _ := e.cat.Get(sku)
+	if again.Freight != 14000 || !again.FreightConfirmed {
+		t.Fatalf("el flete a mano debe volver a leerse de Dropi: %+v", again)
+	}
+}
+
+func TestSyncKeepsFreightEstimatedWhenDropiCannotQuote(t *testing.T) {
+	// Sandbox has no carriers: the cost is real, the freight must NOT be marked real.
+	srv := fakeDropi(t, "tok-dropi-123456")
+	_ = srv
+	e := newEnv(t, "")
+	e.do("PUT", "/api/ajustes/dropi", map[string]any{"token": "tok-dropi-123456"}) // no origin city
+	sku := e.cat.Default().SKU
+	p := e.cat.Default()
+	p.DropiProductID = "555"
+	if _, err := e.cat.Save(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	res, err := e.srv.SyncProduct(t.Context(), sku)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := e.cat.Get(sku)
+	if !got.CostConfirmed || got.FreightConfirmed || res.FreightWarn == "" {
+		t.Fatalf("costo real pero flete aún estimado y con motivo: %+v %+v", got, res)
+	}
+}
+
+func TestSyncAllSkipsProductsWithoutDropiID(t *testing.T) {
+	fakeDropi(t, "tok-dropi-123456")
+	e := newEnv(t, "")
+	connectDropi(t, e, "tok-dropi-123456")
+	if n := e.srv.SyncAll(t.Context()); n != 0 {
+		t.Fatalf("sin ID de Dropi no hay nada que sincronizar: %d", n)
+	}
+	p := e.cat.Default()
+	p.DropiProductID = "555"
+	if _, err := e.cat.Save(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.srv.SyncAll(t.Context()); n != 1 {
+		t.Fatalf("debía actualizar 1 producto: %d", n)
+	}
+}

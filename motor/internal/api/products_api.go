@@ -60,6 +60,7 @@ type productSummary struct {
 	Category      string `json:"categoria"`
 	Active        bool   `json:"activo"`
 	CostConfirmed bool   `json:"costo_confirmado"`
+	FreightReal   bool   `json:"flete_confirmado"`
 	Offers        int    `json:"ofertas"`
 	PriceFrom     int64  `json:"precio_desde"`
 	BestProfit    int64  `json:"ganancia_esperada_mejor"`
@@ -76,7 +77,7 @@ func (s *Server) listProducts(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []productSummary{}
 	for _, p := range s.Catalog.List() {
-		sm := productSummary{SKU: p.SKU, Name: p.Name, Category: p.Category, Active: p.Active, CostConfirmed: p.CostConfirmed,
+		sm := productSummary{SKU: p.SKU, Name: p.Name, Category: p.Category, Active: p.Active, CostConfirmed: p.CostConfirmed, FreightReal: p.FreightConfirmed,
 			Offers: len(p.Offers), Orders: counts[catalog.NormalizeSKU(p.SKU)]}
 		for i, e := range s.economics(p) {
 			if i == 0 || e.Price < sm.PriceFrom {
@@ -192,6 +193,7 @@ func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cleanProduct(&p)
+	p.FreightConfirmed, p.DropiSyncedAt = false, "" // only a real Dropi read sets these
 	if _, exists := s.Catalog.Get(p.SKU); exists {
 		writeErr(w, errors.New("ya existe un producto con ese código (SKU); elige otro"))
 		return
@@ -220,12 +222,25 @@ func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
 	cleanProduct(&p)
 	p.SKU = old.SKU // the code identifies the product; it cannot change
 	p.Active = old.Active
+	// A freight typed by hand is an estimate again; the sync marks it real.
+	p.FreightConfirmed = old.FreightConfirmed && p.Freight == old.Freight
+	p.DropiSyncedAt = old.DropiSyncedAt
 	if _, err := s.Catalog.Save(r.Context(), p); err != nil {
 		writeErr(w, err)
 		return
 	}
+	out := map[string]any{"ok": true}
+	// With a Dropi ID the real cost and freight are copied automatically.
+	if id := strings.TrimSpace(p.DropiProductID); id != "" && s.Hub != nil && s.Hub.Dropi() != nil &&
+		(id != strings.TrimSpace(old.DropiProductID) || !p.CostConfirmed || !p.FreightConfirmed) {
+		if res, err := s.SyncProduct(r.Context(), p.SKU); err != nil {
+			out["dropi_aviso"] = err.Error()
+		} else {
+			out["dropi"] = res
+		}
+	}
 	s.Engine.Events.Publish(convo.Event{Type: "producto"})
-	writeJSON(w, 200, map[string]any{"ok": true})
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) deleteProduct(w http.ResponseWriter, r *http.Request) {

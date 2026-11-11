@@ -161,6 +161,12 @@ func (c *cli) dropi(args []string) error {
 		}
 		c.p("Costo actualizado desde Dropi: $%s (antes $%s). Marcado como confirmado.",
 			catalog.FormatCOP(out["costo"].(int64)), catalog.FormatCOP(out["costo_anterior"].(int64)))
+		if w, _ := out["flete_aviso"].(string); w != "" {
+			c.p("Aviso: el flete NO se pudo confirmar: %s", w)
+		} else if n, _ := out["flete_ciudades"].(int); n > 0 {
+			c.p("Flete real de Dropi: $%s (antes $%s), promedio del mas barato hacia %d ciudades principales.",
+				catalog.FormatCOP(out["flete"].(int64)), catalog.FormatCOP(out["flete_anterior"].(int64)), n)
+		}
 		return nil
 	}
 	return fmt.Errorf("no conozco 'dropi %s'; usa 'motor ayuda'", sub)

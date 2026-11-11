@@ -282,7 +282,7 @@ function setupSteps(st) {
     { done: pr.activos > 0, required: true, title: 'Tener al menos un producto activo',
       desc: pr.activos > 0 ? `${pr.activos} activo(s) de ${pr.total}` : 'Crea o activa un producto con su costo, flete y ofertas.', go: 'productos' },
     { done: pr.activos > 0 && pr.costo_confirmado >= pr.activos, required: false, title: 'Confirmar costos con el proveedor',
-      desc: 'Mientras el costo no esté confirmado, la rentabilidad mostrada es estimada.', go: 'productos' },
+      desc: 'Pon el ID de Dropi de cada producto: el Motor trae solo el costo y el flete reales. Mientras no, la rentabilidad es estimada.', go: 'productos' },
     { done: !!(st.dropi && st.dropi.conectado), required: false, title: 'Conectar Dropi (opcional)',
       desc: st.dropi && st.dropi.conectado ? 'Conectado: el Motor cotiza fletes reales y compara transportadoras' : 'Pega tu token de Dropi en Conexiones para cotizar fletes reales y traer los costos de tus productos.', go: 'conexiones' },
     { done: pg.listo, required: true, title: 'Definir cómo cobrar los anticipos',

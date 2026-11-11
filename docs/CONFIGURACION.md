@@ -321,15 +321,26 @@ por transportadora (ciudades y zonas lejanas) y se muestran con **~** (por ejemp
 aproximados: ajustalos con lo que veas en tus envios. En cada pedido puedes **elegir otra transportadora** (se recalcula la
 ganancia) y tu eleccion se conserva si luego editas el pedido.
 
-### Costos de los productos y "Costo sin confirmar"
+### Costo y flete reales (automatico) y "sin confirmar"
 
-Un producto muestra **Costo sin confirmar** cuando su costo lo escribiste tu como estimado. Se confirma de dos formas:
+Un producto muestra **Costo sin confirmar** y **Flete sin confirmar** cuando esos valores los escribiste tu como
+estimado. Con Dropi conectado (entorno real) y el **ID de Dropi** del producto, el Motor los reemplaza **solo** por los reales:
 
-- Marcando **Costo confirmado** en **Productos > Ofertas y costos**, o
-- Escribiendo el **ID de Dropi** del producto y pulsando **Traer costos de Dropi** (copia el costo real y lo marca
-  como confirmado).
+- **Costo**: el precio de proveedor que Dropi tiene para ese producto.
+- **Flete**: promedio del flete mas barato que Dropi cotiza hacia Bogota, Medellin, Cali, Barranquilla y Bucaramanga,
+  usando la oferta principal. Es una referencia para la ficha; en cada pedido el flete es el real hacia **ese** destino.
 
-Conectar Dropi por si solo **no** confirma los costos.
+Se actualiza automaticamente: al **guardar** el producto, al **conectar** Dropi (o cambiar token u origen), al **encender**
+el Motor y **cada 6 horas**. El boton **Actualizar desde Dropi** (Productos > Ofertas y costos) lo fuerza al instante.
+
+Reglas para no engañarte:
+
+- Si Dropi no puede cotizar (entorno de pruebas, falta la ciudad de origen), el **costo** queda real pero el **flete sigue
+  marcado como estimado**, con el motivo. Nunca se marca real algo que no se leyo de Dropi.
+- Si cambias el flete a mano, vuelve a ser estimado hasta la proxima lectura de Dropi.
+- Si una actualizacion automatica falla, aparece un aviso en Inicio; los valores anteriores se conservan.
+- Conectar Dropi **sin** poner el ID del producto no confirma nada.
+- Tambien puedes marcar **Costo confirmado** a mano si el proveedor te lo confirmo por otra via.
 
 ### Transportadoras
 
