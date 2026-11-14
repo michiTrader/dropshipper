@@ -78,16 +78,43 @@ func (s *Server) delDropi(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func dropiAdvice(err error) string {
+func dropiAdvice(err error) string { return dropiAdviceTok(err, "") }
+
+// dropiAdviceTok explains a Dropi failure in plain Spanish. With the token it
+// can also say WHY a token is rejected: Dropi ties some integration types to
+// allowed IPs, and answers a plain "Access denied" either way.
+func dropiAdviceTok(err error, token string) string {
 	var ae *dropi.APIError
 	if errors.As(err, &ae) && ae.IsAuth() {
-		return "Dropi rechazó el token. Créalo en Dropi > Configuración > Integraciones, cópialo completo y pégalo aquí (si usas el entorno de pruebas, activa el interruptor de pruebas)."
+		msg := "Dropi rechazó el token (Access denied)."
+		if ae.IP != "" {
+			msg += " Dropi vio la conexión desde la IP " + ae.IP + "."
+		}
+		if info, ok := dropi.ParseToken(token); ok && info.Restricted() {
+			where := strings.Join(append(append([]string{}, info.AllowedIPs...), info.AllowedHosts...), ", ")
+			msg += fmt.Sprintf(" Este token es de tipo %s y solo se puede usar desde: %s.", firstNonEmpty(info.Type, "(desconocido)"), where)
+			if ae.IP != "" && !info.AllowsIP(ae.IP) {
+				msg += " Tu IP no está en esa lista, por eso lo rechaza."
+			}
+			msg += " Crea la integración en Dropi con otro tipo de la lista, o pídele a Dropi que autorice tu IP."
+			return msg
+		}
+		return msg + " Revisa que lo copiaste completo desde Dropi > Mis Integraciones, que el entorno de pruebas esté desmarcado si el token es de app.dropi.co y que la integración no esté limitada a otras IPs."
 	}
 	low := strings.ToLower(err.Error())
 	if strings.Contains(low, "no such host") || strings.Contains(low, "connection refused") || strings.Contains(low, "timeout") || strings.Contains(low, "deadline") {
 		return "No se pudo conectar con Dropi. Revisa tu conexión a internet e inténtalo de nuevo."
 	}
 	return err.Error()
+}
+
+func firstNonEmpty(v ...string) string {
+	for _, s := range v {
+		if strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func (s *Server) testDropi(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +132,7 @@ func (s *Server) testDropi(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	n, err := dropi.New(cfg.Token, cfg.Sandbox).Ping(ctx)
 	if err != nil {
-		testFail(w, dropiAdvice(err))
+		testFail(w, dropiAdviceTok(err, cfg.Token))
 		return
 	}
 	msg := "Conectado a Dropi"
@@ -253,7 +280,7 @@ func (s *Server) Simulate(ctx context.Context, in ScenarioIn) (SimResult, error)
 	if client == nil {
 		add("Conexión con Dropi", "error", "Falta el token de Dropi (Conexiones > Dropi).")
 	} else if n, err := client.Ping(ctx); err != nil {
-		add("Conexión con Dropi", "error", dropiAdvice(err))
+		add("Conexión con Dropi", "error", dropiAdviceTok(err, client.Token))
 	} else {
 		add("Conexión con Dropi", "ok", fmt.Sprintf("Token válido (%d departamentos).", n))
 	}

@@ -44,31 +44,31 @@ type Shipping struct {
 
 // Product is one product sheet (knowledge/productos/*.yaml).
 type Product struct {
-	SKU            string      `yaml:"sku" json:"sku"`
-	Name           string      `yaml:"nombre" json:"nombre"`
-	Category       string      `yaml:"categoria" json:"categoria"`
-	Short          string      `yaml:"descripcion_corta" json:"descripcion_corta"`
-	Presentation   string      `yaml:"presentacion" json:"presentacion"`
-	Ingredients    []string    `yaml:"ingredientes" json:"ingredientes"`
-	NoMelatonin    bool        `yaml:"sin_melatonina" json:"sin_melatonina"`
-	Usage          string      `yaml:"modo_uso" json:"modo_uso"`
-	Feeling        string      `yaml:"sensacion" json:"sensacion"`
-	Precautions    []string    `yaml:"precauciones" json:"precauciones"`
-	Offers         []Offer     `yaml:"ofertas" json:"ofertas"`
-	UnitCost       int64       `yaml:"costo_proveedor" json:"costo_proveedor"`
-	Freight        int64       `yaml:"flete_estimado" json:"flete_estimado"`
-	CostConfirmed  bool        `yaml:"costo_confirmado" json:"costo_confirmado"`
-	DropiProductID string      `yaml:"dropi_product_id" json:"dropi_product_id"`
+	SKU            string   `yaml:"sku" json:"sku"`
+	Name           string   `yaml:"nombre" json:"nombre"`
+	Category       string   `yaml:"categoria" json:"categoria"`
+	Short          string   `yaml:"descripcion_corta" json:"descripcion_corta"`
+	Presentation   string   `yaml:"presentacion" json:"presentacion"`
+	Ingredients    []string `yaml:"ingredientes" json:"ingredientes"`
+	NoMelatonin    bool     `yaml:"sin_melatonina" json:"sin_melatonina"`
+	Usage          string   `yaml:"modo_uso" json:"modo_uso"`
+	Feeling        string   `yaml:"sensacion" json:"sensacion"`
+	Precautions    []string `yaml:"precauciones" json:"precauciones"`
+	Offers         []Offer  `yaml:"ofertas" json:"ofertas"`
+	UnitCost       int64    `yaml:"costo_proveedor" json:"costo_proveedor"`
+	Freight        int64    `yaml:"flete_estimado" json:"flete_estimado"`
+	CostConfirmed  bool     `yaml:"costo_confirmado" json:"costo_confirmado"`
+	DropiProductID string   `yaml:"dropi_product_id" json:"dropi_product_id"`
 	// FreightConfirmed is true when Freight was copied from real Dropi quotes
 	// (not typed by hand); DropiSyncedAt is when cost and freight were last
 	// read from Dropi (RFC 3339, empty = never).
-	FreightConfirmed bool   `yaml:"flete_confirmado" json:"flete_confirmado"`
-	DropiSyncedAt    string `yaml:"dropi_sincronizado" json:"dropi_sincronizado"`
-	Shipping       Shipping    `yaml:"envio" json:"envio"`
-	Guarantee      string      `yaml:"garantia" json:"garantia"`
-	Pains          []string    `yaml:"dolores" json:"dolores"`
-	Benefits       []string    `yaml:"beneficios" json:"beneficios"`
-	Objections     []Objection `yaml:"objeciones" json:"objeciones"`
+	FreightConfirmed bool        `yaml:"flete_confirmado" json:"flete_confirmado"`
+	DropiSyncedAt    string      `yaml:"dropi_sincronizado" json:"dropi_sincronizado"`
+	Shipping         Shipping    `yaml:"envio" json:"envio"`
+	Guarantee        string      `yaml:"garantia" json:"garantia"`
+	Pains            []string    `yaml:"dolores" json:"dolores"`
+	Benefits         []string    `yaml:"beneficios" json:"beneficios"`
+	Objections       []Objection `yaml:"objeciones" json:"objeciones"`
 	// Active products are offered by the seller; inactive ones are kept
 	// (history, pending orders) but never sold. Stored beside the data.
 	Active bool `yaml:"-" json:"activo"`
