@@ -35,13 +35,19 @@ type fakeDropi struct {
 	tools     []map[string]any
 	results   map[string]string // tool name -> JSON text of the answer
 	refreshes int
+
+	// cityAnswer (optional) answers search_cities by the name searched.
+	cityAnswer   func(name string) string
+	citySearches []string
 }
 
 func schema(props map[string]any, required ...string) map[string]any {
 	return map[string]any{"type": "object", "properties": props, "required": required}
 }
 
-func strField(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+func strField(desc string) map[string]any {
+	return map[string]any{"type": "string", "description": desc}
+}
 
 func newFake(t *testing.T) *fakeDropi {
 	f := &fakeDropi{t: t, access: "acc-1", refresh: "ref-1", results: map[string]string{}}
@@ -177,6 +183,11 @@ func (f *fakeDropi) mcp(w http.ResponseWriter, r *http.Request) {
 		f.calls = append(f.calls, p.Name)
 		f.lastArgs = p.Args
 		txt, ok := f.results[p.Name]
+		if p.Name == "search_cities" && f.cityAnswer != nil {
+			n, _ := p.Args["name"].(string)
+			f.citySearches = append(f.citySearches, n)
+			txt, ok = f.cityAnswer(n), true
+		}
 		if !ok {
 			result = map[string]any{"isError": true, "content": []map[string]any{{"type": "text", "text": "no existe"}}}
 		} else {

@@ -53,7 +53,13 @@ func (r ToolResult) JSON() []byte {
 	if len(r.Structured) > 0 && string(r.Structured) != "null" {
 		return r.Structured
 	}
-	return []byte(strings.TrimSpace(r.Text))
+	t := strings.TrimSpace(r.Text)
+	if t != "" && !json.Valid([]byte(t)) {
+		if b, ok := toonToJSON(t); ok {
+			return b
+		}
+	}
+	return []byte(t)
 }
 
 // MCPError is an error the MCP server reported.

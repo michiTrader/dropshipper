@@ -294,7 +294,8 @@ conectas Dropi a otras herramientas. **No tienes que copiar ningun token.**
 1. En el panel abre **Conexiones > Dropi** (la tarjeta debajo de Inteligencia artificial).
 2. Pulsa **Conectar con Dropi**. Se abre la pagina de Dropi: inicia sesion y acepta el acceso.
 3. Al terminar, la pagina te lo confirma y el panel se actualiza solo (dice **Conectado**).
-4. Escribe el **departamento y la ciudad de origen** (desde donde sale tu mercancia) y pulsa **Guardar Dropi**.
+4. **No necesitas ciudad de origen**: con el inicio de sesion, Dropi cotiza el flete desde la bodega de cada proveedor
+   hasta la ciudad del cliente (el origen solo se pide si usas el token de integracion).
 5. Deja **sin marcar** el entorno de pruebas: el de pruebas de Dropi **no tiene transportadoras** y no cotiza fletes.
 6. Pulsa **Ver herramientas**: el Motor revisa lo que ofrece Dropi y te dice, para cada tarea (cotizar el flete,
    leer un producto, crear una orden), si sabe usarla o que dato le falta. Esto sirve para confirmar que todo
@@ -400,9 +401,13 @@ estimado. Con Dropi conectado (entorno real) y el **ID de Dropi** del producto, 
 Se actualiza automaticamente: al **guardar** el producto, al **conectar** Dropi (o cambiar token u origen), al **encender**
 el Motor y **cada 6 horas**. El boton **Actualizar desde Dropi** (Productos > Ofertas y costos) lo fuerza al instante.
 
+El **codigo (SKU)** del producto en el Motor es solo tu codigo interno; no tiene que ser igual al de Dropi. Lo que une
+ambos es el campo **ID del producto en Dropi**. Dropi responde en un formato de texto compacto (TOON), que el Motor
+entiende. Los productos con **variaciones** (talla, color) no se cotizan solos: el flete queda estimado.
+
 Reglas para no engañarte:
 
-- Si Dropi no puede cotizar (entorno de pruebas, falta la ciudad de origen), el **costo** queda real pero el **flete sigue
+- Si Dropi no puede cotizar (entorno de pruebas, producto con variaciones, ciudad que Dropi no reconoce), el **costo** queda real pero el **flete sigue
   marcado como estimado**, con el motivo. Nunca se marca real algo que no se leyo de Dropi.
 - Si cambias el flete a mano, vuelve a ser estimado hasta la proxima lectura de Dropi.
 - Si una actualizacion automatica falla, aparece un aviso en Inicio; los valores anteriores se conservan.

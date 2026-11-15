@@ -57,7 +57,7 @@ func (s *Server) putDropi(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.update(w, r, func(st *settings.Settings) error {
 		st.Dropi = in.apply(st.Dropi)
-		if st.Dropi.OriginCity != "" {
+		if st.Dropi.OriginCity != "" && !st.Dropi.UsesMCP() {
 			if _, ok := geo.Find(st.Dropi.OriginDept, st.Dropi.OriginCity); !ok {
 				return fmt.Errorf("no reconozco la ciudad de origen %q; escríbela como aparece en Dropi (por ejemplo Bogotá o Medellín)", st.Dropi.OriginCity)
 			}
@@ -182,7 +182,7 @@ func (s *Server) testDropi(w http.ResponseWriter, r *http.Request) {
 	if cfg.Sandbox {
 		msg += ". Estás en el entorno de pruebas: allí no hay transportadoras, así que no se pueden cotizar fletes; para eso usa el entorno real."
 	}
-	if cfg.OriginCity == "" {
+	if cfg.OriginCity == "" && !cfg.UsesMCP() {
 		msg += " Falta indicar tu ciudad de origen para cotizar fletes."
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "mensaje": msg})

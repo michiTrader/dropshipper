@@ -276,9 +276,16 @@ func (s *Service) freights(ctx context.Context, n config.Negocio, sc Scenario) (
 	if s.Origin != nil {
 		od, oc = s.Origin()
 	}
-	origin, ok := geo.Find(od, oc)
-	if !ok {
-		return nil, "Falta la ciudad de origen de tus envíos (Conexiones > Dropi): se usa el flete estimado."
+	// With the Dropi login (MCP) Dropi quotes from the supplier's own
+	// warehouse: no origin is needed. Only the integration-token mode asks
+	// for the city the parcels leave from.
+	originDANE := ""
+	if k, isK := q.(interface{ Kind() string }); !isK || k.Kind() != "mcp" {
+		origin, ok := geo.Find(od, oc)
+		if !ok {
+			return nil, "Falta la ciudad de origen de tus envíos (Conexiones > Dropi): se usa el flete estimado."
+		}
+		originDANE = origin.DANE7()
 	}
 	dest, ok := geo.Find(sc.Department, sc.City)
 	if !ok {
@@ -293,11 +300,11 @@ func (s *Service) freights(ctx context.Context, n config.Negocio, sc Scenario) (
 	if units < 1 {
 		units = 1
 	}
-	key := fmt.Sprintf("%s>%s|%v|%d|%s|%d", origin.DANE7(), dest.DANE7(), cod, amount, sc.ProductID, units)
+	key := fmt.Sprintf("%s>%s|%v|%d|%s|%d", originDANE, dest.DANE7(), cod, amount, sc.ProductID, units)
 	quotes, hit := s.cached(key)
 	if !hit {
 		var err error
-		quotes, err = q.Quote(ctx, dropi.QuoteInput{COD: cod, Amount: amount, OriginDANE: origin.DANE7(), DestDANE: dest.DANE7(),
+		quotes, err = q.Quote(ctx, dropi.QuoteInput{COD: cod, Amount: amount, OriginDANE: originDANE, DestDANE: dest.DANE7(),
 			ProductID: strings.TrimSpace(sc.ProductID), Price: sc.Price / int64(units), Units: units})
 		if err != nil {
 			return nil, "Dropi no pudo cotizar el flete (" + err.Error() + "): se usa el flete estimado."
