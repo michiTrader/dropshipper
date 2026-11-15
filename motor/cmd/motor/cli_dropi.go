@@ -30,6 +30,7 @@ func (c *cli) apiServer() (*api.Server, error) {
 		return nil, err
 	}
 	h := hub.New()
+	h.Manager = c.set
 	h.Apply(c.set.Get())
 	live := config.NewLive(c.set.Get().Negocio)
 	ship := &shipping.Service{
@@ -64,12 +65,27 @@ func (c *cli) dropi(args []string) error {
 	switch sub {
 	case "ver":
 		c.p("Conectado:         %s", yesNo(d.Enabled()))
-		c.p("Token:             %s", maskOr(d.Token))
+		switch {
+		case d.UsesMCP() && d.MCPStale:
+			c.p("Inicio de sesion:  VENCIO: entra al panel > Conexiones > Dropi > Conectar con Dropi")
+		case d.UsesMCP():
+			c.p("Inicio de sesion:  si (MCP de Dropi), desde %s", d.MCPSince.Local().Format("2006-01-02 15:04"))
+		default:
+			c.p("Inicio de sesion:  no (se conecta desde el panel: Conexiones > Dropi > Conectar con Dropi)")
+		}
+		c.p("Token (avanzado):  %s", maskOr(d.Token))
 		c.p("Entorno:           %s", modeLabel(d.Sandbox))
 		c.p("Origen:            %s", firstOr(strings.TrimSpace(d.OriginCity+", "+d.OriginDept), "(sin configurar: motor dropi configurar --ciudad-origen ...)"))
 		c.p("Modo de pedidos:   %s (manual = tu copias el pedido a Dropi; api = el Motor lo crea)", s.Negocio.Dropi.Modo)
 		return nil
+	case "mcp":
+		return c.dropiMCP(rest)
 	case "quitar":
+		if d.UsesMCP() && d.MCPRevokeURL != "" {
+			rctx, cancel := context.WithTimeout(c.ctx, 8*time.Second)
+			_ = dropi.Revoke(rctx, nil, d.MCPRevokeURL, d.MCPClientID, firstOr(d.MCPRefresh, d.MCPAccess))
+			cancel()
+		}
 		if err := c.set.Update(c.ctx, func(st *settings.Settings) error {
 			st.Dropi = config.DropiConfig{Sandbox: st.Dropi.Sandbox, OriginDept: st.Dropi.OriginDept, OriginCity: st.Dropi.OriginCity}
 			st.Negocio.Dropi.Modo = "manual"
@@ -129,10 +145,22 @@ func (c *cli) dropi(args []string) error {
 		return nil
 	case "probar":
 		if !d.Enabled() {
-			return errors.New("falta el token (echo $TOKEN | motor dropi configurar --token -)")
+			return errors.New("Dropi no esta conectado: abre el panel > Conexiones > Dropi > Conectar con Dropi (o, avanzado: echo $TOKEN | motor dropi configurar --token -)")
 		}
 		ctx, cancel := context.WithTimeout(c.ctx, 25*time.Second)
 		defer cancel()
+		if d.UsesMCP() {
+			cl, err := c.liveDropi()
+			if err != nil {
+				return err
+			}
+			n, err := cl.Ping(ctx)
+			if err != nil {
+				return errors.New(api.DropiAdvice(err))
+			}
+			c.p("Conexion correcta con Dropi por tu inicio de sesion (%d herramientas).", n)
+			return nil
+		}
 		n, err := dropi.New(d.Token, d.Sandbox).Ping(ctx)
 		if err != nil {
 			return err
@@ -170,6 +198,88 @@ func (c *cli) dropi(args []string) error {
 		return nil
 	}
 	return fmt.Errorf("no conozco 'dropi %s'; usa 'motor ayuda'", sub)
+}
+
+// liveDropi builds the Dropi client the way the Motor does (the same login,
+// renewed sessions are saved back).
+func (c *cli) liveDropi() (dropi.API, error) {
+	srv, err := c.apiServer()
+	if err != nil {
+		return nil, err
+	}
+	cl := srv.Hub.Dropi()
+	if cl == nil {
+		return nil, errors.New("Dropi no esta conectado")
+	}
+	return cl, nil
+}
+
+// dropiMCP: "motor dropi mcp herramientas" lists what Dropi's MCP offers and
+// whether the Motor can use it; "motor dropi mcp llamar HERRAMIENTA JSON" runs
+// one tool by hand (read-only tools only, please).
+func (c *cli) dropiMCP(args []string) error {
+	cl, err := c.liveDropi()
+	if err != nil {
+		return err
+	}
+	m, ok := cl.(*dropi.MCPAPI)
+	if !ok {
+		return errors.New("esto requiere el inicio de sesion con Dropi (panel > Conexiones > Dropi > Conectar con Dropi)")
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, 60*time.Second)
+	defer cancel()
+	sub := "herramientas"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "herramientas":
+		tools, rep, err := m.Report(ctx)
+		if err != nil {
+			return errors.New(api.DropiAdvice(err))
+		}
+		c.p("Herramientas del MCP de Dropi (%d):", len(tools))
+		for _, t := range tools {
+			c.p("  - %s: %s", t.Name, snippetText(t.Description, 100))
+		}
+		c.p("")
+		for _, r := range rep {
+			mark := "NO "
+			if r.Ready {
+				mark = "OK "
+			}
+			c.p("%s%s -> %s: %s", mark, r.Job, firstOr(r.Tool, "(ninguna)"), snippetText(r.Detail, 300))
+		}
+		return nil
+	case "llamar":
+		if len(args) < 2 {
+			return errors.New("uso: motor dropi mcp llamar HERRAMIENTA '{\"campo\":\"valor\"}'")
+		}
+		var in map[string]any
+		if len(args) > 2 {
+			if err := json.Unmarshal([]byte(args[2]), &in); err != nil {
+				return fmt.Errorf("el JSON de argumentos no es valido: %w", err)
+			}
+		}
+		res, err := m.Call(ctx, args[1], in)
+		if err != nil {
+			return errors.New(api.DropiAdvice(err))
+		}
+		c.p("%s", string(res.JSON()))
+		if res.IsError {
+			return errors.New("la herramienta respondio con error")
+		}
+		return nil
+	}
+	return errors.New("uso: motor dropi mcp [herramientas | llamar HERRAMIENTA JSON]")
+}
+
+func snippetText(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "..."
+	}
+	return s
 }
 
 func firstOr(v, def string) string {

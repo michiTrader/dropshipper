@@ -152,30 +152,92 @@ function openProvider(p) {
 
 
 // =============== Dropi ===============
+let dpPoll = null;
+function stopDropiPoll() { if (dpPoll) { clearInterval(dpPoll); dpPoll = null; } }
+
+// Bloque "Conectar con Dropi": el dueño inicia sesión en la página de Dropi.
+function dropiMcpBlock(d) {
+  if (d.mcp_necesita_login) {
+    return notice('warn', '<b>Tu sesión con Dropi venció.</b> Dropi ya no acepta la sesión guardada; pulsa el botón e inicia sesión otra vez. Mientras tanto los fletes y costos usan los valores que escribiste.') +
+      `<div class="form-actions" style="margin:6px 0 12px"><button class="btn primary" type="button" id="dpMcpConnect">${ic('refresh', 14)} Volver a conectar con Dropi</button></div>`;
+  }
+  if (d.mcp_conectado) {
+    const since = d.mcp_desde ? new Date(d.mcp_desde).toLocaleString('es-CO') : '';
+    return notice('ok', `<b>Conectado con tu inicio de sesión de Dropi</b>${since ? ' (desde ' + esc(since) + ')' : ''}. El Motor renueva la sesión solo; si Dropi la cierra, aquí te avisaremos.`) +
+      `<div class="form-actions" style="margin:6px 0 12px"><button class="btn" type="button" id="dpMcpTools">${ic('search', 14)} Ver herramientas</button><span class="spacer"></span><button class="btn danger" type="button" id="dpMcpOff">Desconectar</button></div><div class="testres" id="dpMcpReport"></div>`;
+  }
+  return notice('info', '<b>Cómo conectarlo:</b> pulsa <b>Conectar con Dropi</b>, inicia sesión en la página de Dropi que se abre y acepta el acceso. No tienes que copiar ningún token.') +
+    `<div class="form-actions" style="margin:6px 0 12px"><button class="btn primary" type="button" id="dpMcpConnect">${ic('truck', 14)} Conectar con Dropi</button></div>`;
+}
+
+function bindDropiMcp(d) {
+  const on = $('#dpMcpConnect');
+  if (on) on.onclick = (e) => busy(e.currentTarget, async () => {
+    try {
+      const r = await post('/api/dropi/mcp/conectar');
+      if (!r.ok) { toast(r.error || 'No se pudo iniciar la conexión con Dropi.', true); return; }
+      const w = window.open(r.url, '_blank');
+      if (!w) { toast('Tu navegador bloqueó la ventana de Dropi. Permite las ventanas emergentes para esta página y vuelve a pulsar.', true); return; }
+      toast('Inicia sesión en Dropi; esta pantalla se actualizará sola.');
+      stopDropiPoll();
+      let n = 0;
+      dpPoll = setInterval(async () => {
+        n++;
+        if (n > 150 || !$('#dpMcpConnect')) return stopDropiPoll();
+        try {
+          const c = await api('/api/ajustes');
+          if (c.dropi && c.dropi.mcp_conectado) { stopDropiPoll(); toast('Dropi conectado.'); renderConexiones(); }
+        } catch (_) { /* seguimos intentando */ }
+      }, 2000);
+    } catch (err) { toast(err.message, true); }
+  });
+  const off = $('#dpMcpOff');
+  if (off) off.onclick = async () => {
+    if (!confirm('¿Desconectar tu sesión de Dropi? Los fletes y costos volverán a ser los que escribiste a mano.')) return;
+    try { await post('/api/dropi/mcp/desconectar'); toast('Sesión de Dropi cerrada.'); renderConexiones(); } catch (err) { toast(err.message, true); }
+  };
+  const tools = $('#dpMcpTools');
+  if (tools) tools.onclick = (e) => busy(e.currentTarget, async () => {
+    const box = $('#dpMcpReport');
+    try {
+      const r = await api('/api/dropi/mcp/herramientas');
+      if (!r.ok) { box.className = 'testres bad'; box.textContent = r.error; return; }
+      const rows = (r.informe || []).map(x => `<li>${x.lista ? '✅' : '⚠️'} <b>${esc(x.tarea)}</b> → ${esc(x.herramienta || 'ninguna')}<br><span class="small muted">${esc(x.detalle)}</span></li>`).join('');
+      const names = (r.herramientas || []).map(t => `<li><code>${esc(t.nombre)}</code> <span class="small muted">${esc((t.descripcion || '').slice(0, 140))}</span></li>`).join('');
+      box.className = 'testres ok';
+      box.innerHTML = `<b>Lo que el Motor puede hacer con Dropi</b><ul style="margin:6px 0 10px 18px">${rows}</ul><details><summary>Herramientas que ofrece Dropi (${(r.herramientas || []).length})</summary><ul style="margin:6px 0 0 18px">${names}</ul></details>`;
+    } catch (err) { box.className = 'testres bad'; box.textContent = err.message; }
+  });
+}
+
 function drawDropi() {
+  stopDropiPoll();
   const d = CN.cfg.dropi;
   const modoApi = (CN.cfg.negocio.dropi || {}).modo === 'api';
   $('#cnDropi').innerHTML = `<div class="card">
-    <div class="card-head"><span class="ico">${ic('truck', 18)}</span><div><h3>Dropi ${d.configurado ? '<span class="tag ok">Conectado</span>' : '<span class="tag">Sin conectar</span>'}</h3>
+    <div class="card-head"><span class="ico">${ic('truck', 18)}</span><div><h3>Dropi ${d.mcp_necesita_login ? '<span class="tag bad">Sesión vencida</span>' : d.configurado ? '<span class="tag ok">Conectado</span>' : '<span class="tag">Sin conectar</span>'}</h3>
       <div class="desc">Con Dropi el Motor cotiza el flete real de cada transportadora, elige la más rentable y trae el costo de tus productos. Sin conectarlo funciona igual, con los valores que escribas a mano.</div></div></div>
-    ${d.configurado ? '' : notice('info', '<b>Cómo conectarlo:</b> en Dropi entra a <b>Configuración → Integraciones</b>, crea una integración y copia el token. Pégalo aquí, indica desde qué ciudad despachas y pulsa <b>Probar conexión</b>.')}
+    ${dropiMcpBlock(d)}
     <form id="dpForm" autocomplete="off">
       <div class="fgrid">
-        <label class="field full"><span>Token de integración de Dropi</span>
-          <input class="secret-input" name="token" type="password" autocomplete="new-password" readonly data-lpignore="true" data-1p-ignore placeholder="${d.token.configurada ? 'Sin cambios' : 'Pega aquí el token completo'}">
-          ${secretHint(d.token)}<small>Se guarda en la base de datos del Motor y nunca se vuelve a mostrar completo.</small></label>
         ${fld('origen_departamento', 'Departamento de origen', d.origen_departamento, { ph: 'Antioquia', help: 'Desde donde sale tu mercancía (bodega del proveedor o la tuya).' })}
         ${fld('origen_ciudad', 'Ciudad de origen', d.origen_ciudad, { ph: 'Medellín', help: 'Se usa para cotizar el flete hacia cada destino.' })}
+        <details class="full" ${d.token.configurada ? 'open' : ''}><summary class="small muted" style="cursor:pointer">Opciones avanzadas: usar un token de integración en lugar del inicio de sesión</summary>
+          <label class="field full" style="margin-top:8px"><span>Token de integración de Dropi</span>
+            <input class="secret-input" name="token" type="password" autocomplete="new-password" readonly data-lpignore="true" data-1p-ignore placeholder="${d.token.configurada ? 'Sin cambios' : 'Pega aquí el token completo'}">
+            ${secretHint(d.token)}<small>Solo si no puedes iniciar sesión. Si Dropi responde «Access denied» con tu token, usa «Conectar con Dropi». Si hay inicio de sesión, este token no se usa.</small></label>
+        </details>
         <label class="switch full"><input type="checkbox" name="sandbox" ${d.sandbox ? 'checked' : ''}><div><b>Entorno de pruebas de Dropi</b><span>Úsalo solo para probar el token. En pruebas no hay transportadoras, así que no se cotizan fletes; para eso desmárcalo.</span></div></label>
       </div>
       <div class="small muted" style="margin:2px 0 10px">Servidor: <code>${esc(d.base_url)}</code></div>
       ${d.configurado ? sw('dp_modo_api', 'Crear los pedidos aprobados directamente en Dropi', 'Si lo apagas, el Motor te entrega los datos listos para copiar y tú registras la guía a mano.', modoApi) : ''}
       <div class="testres" id="dpTest"></div>
       <div class="form-actions"><button class="btn" type="button" id="dpTestBtn">${ic('refresh', 14)} Probar conexión</button><span class="spacer"></span>
-        ${d.configurado ? '<button class="btn danger" type="button" id="dpDel">Desconectar</button>' : ''}<button class="btn primary" type="submit">Guardar Dropi</button></div>
+        ${d.configurado && !d.mcp_conectado && !d.mcp_necesita_login ? '<button class="btn danger" type="button" id="dpDel">Desconectar</button>' : ''}<button class="btn primary" type="submit">Guardar Dropi</button></div>
     </form>
     ${d.configurado ? `<div class="subcard"><h4>Simular un pedido</h4><div class="small muted" style="margin-bottom:8px">Prueba qué haría el Motor con un pedido real: cotiza, elige transportadora y revisa costos. <b>No crea nada en Dropi.</b> </div><a class="btn small" href="#envios">${ic('truck', 13)} Ir al simulador</a></div>` : ''}
   </div>`;
+  bindDropiMcp(d);
   const f = $('#dpForm');
   const body = () => { const x = formData(f); x.sandbox = f.sandbox.checked; return x; };
   $('#dpTestBtn').onclick = (e) => busy(e.currentTarget, async () => showTest($('#dpTest'), await post('/api/dropi/probar', body())));

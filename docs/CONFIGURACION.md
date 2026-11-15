@@ -286,32 +286,62 @@ reinicia el Motor. Para comprobar que haria el Motor con un destino, usa **Produ
 
 Todo esto se hace desde el panel; no hay que usar la terminal.
 
-### Conectar Dropi
+### Conectar Dropi (inicio de sesion, recomendado)
 
-1. En Dropi entra a **Configuracion > Integraciones**, crea una integracion y copia el **token**.
-2. En el panel abre **Conexiones > Dropi** (es la tarjeta debajo de Inteligencia artificial).
-3. Pega el token y escribe el **departamento y la ciudad de origen** (desde donde sale tu mercancia).
-4. Deja **sin marcar** el entorno de pruebas: el de pruebas de Dropi **no tiene transportadoras**, sirve solo para
-   validar el token pero no para cotizar fletes.
-5. Pulsa **Probar conexion** y luego **Guardar Dropi**. Con la conexion lista puedes activar
-   **Crear los pedidos aprobados directamente en Dropi**; si lo dejas apagado, el Motor te entrega los datos para
-   copiar y tu registras la guia a mano.
+El Motor se conecta al **MCP oficial de Dropi** (`mcp.dropi.co`) con tu propio inicio de sesion, igual que cuando
+conectas Dropi a otras herramientas. **No tienes que copiar ningun token.**
 
-Para desconectar, pulsa **Desconectar** en la misma tarjeta. Los fletes vuelven a ser los estimados.
+1. En el panel abre **Conexiones > Dropi** (la tarjeta debajo de Inteligencia artificial).
+2. Pulsa **Conectar con Dropi**. Se abre la pagina de Dropi: inicia sesion y acepta el acceso.
+3. Al terminar, la pagina te lo confirma y el panel se actualiza solo (dice **Conectado**).
+4. Escribe el **departamento y la ciudad de origen** (desde donde sale tu mercancia) y pulsa **Guardar Dropi**.
+5. Deja **sin marcar** el entorno de pruebas: el de pruebas de Dropi **no tiene transportadoras** y no cotiza fletes.
+6. Pulsa **Ver herramientas**: el Motor revisa lo que ofrece Dropi y te dice, para cada tarea (cotizar el flete,
+   leer un producto, crear una orden), si sabe usarla o que dato le falta. Esto sirve para confirmar que todo
+   esta listo antes de vender.
+
+Con la conexion lista puedes activar **Crear los pedidos aprobados directamente en Dropi**; si lo dejas apagado,
+el Motor te entrega los datos para copiar y tu registras la guia a mano.
+
+Notas importantes:
+
+- El Motor **renueva la sesion solo** y guarda la renovacion. Si Dropi la cierra o la revoca, la tarjeta muestra
+  **Sesion vencida** y basta con pulsar **Volver a conectar con Dropi**. Mientras tanto los fletes y costos usan los
+  valores que escribiste a mano; nada se rompe.
+- La conexion se prueba con **Probar conexion**; **Desconectar** cierra la sesion en Dropi y la borra del Motor.
+- Si abres el panel desde otra direccion (por ejemplo por ngrok), Dropi devuelve el navegador a esa misma direccion;
+  el aviso de «Conectado» sale ahi. La conexion queda guardada en el Motor, sea cual sea la direccion que uses.
+- El **costo del proveedor** solo se trae de Dropi si el MCP lo expone de forma clara (campos como `sale_price`,
+  `supplier_price` o `costo`). El Motor **nunca adivina el costo a partir de un precio de venta**: si Dropi no lo
+  entrega, se mantiene el costo que escribiste en la ficha del producto (y sigue marcado «sin confirmar»).
+- Antes de **crear una orden real** el Motor exige que la herramienta de Dropi tenga donde poner telefono,
+  direccion, ciudad, producto y cantidad; si falta algo, **no envia nada** y te lo dice para que la crees a mano.
+  Si Dropi responde pero no se puede leer el numero de la orden, el aviso dice **REVISA en Dropi** antes de reintentar,
+  para no duplicarla.
+
+Por terminal (opcional): `motor dropi ver`, `motor dropi probar`, `motor dropi mcp herramientas` (el mismo informe
+de **Ver herramientas**) y `motor dropi mcp llamar HERRAMIENTA '{"campo":"valor"}'` para ejecutar a mano una
+consulta. La conexion en si siempre se hace desde el panel.
+
+### Alternativa avanzada: token de integracion
+
+Solo si no puedes iniciar sesion. En la tarjeta de Dropi abre **Opciones avanzadas**, pega el token de
+**Configuracion > Integraciones** de Dropi y pulsa **Probar conexion**. Si hay un inicio de sesion guardado, **el
+inicio de sesion tiene prioridad** y el token no se usa; si desconectas el inicio de sesion, el token vuelve a
+funcionar. **Desconectar** (cuando solo hay token) borra el token.
 
 ### Si Dropi dice "Access denied" con un token que parece correcto
 
 Dropi responde **lo mismo** ("Access denied") cuando el token esta mal copiado y cuando el token existe pero **solo
-puede usarse desde ciertas IPs**. Al crear una integracion en Dropi > Mis Integraciones, el **tipo** que eliges
-(APIFY, KOSTA, Easy Bot, DropPage...) puede dejar el token atado a las IPs de esa plataforma, y no hay un tipo generico.
+puede usarse desde ciertas IPs** (segun el tipo de integracion), e incluso hay tokens validos que Dropi rechaza igual.
+**La solucion es no usar token: pulsa Conectar con Dropi.**
 
-**Probar conexion** ahora lee el token (solo localmente, sin enviarlo a ningun lado) y te dice: el tipo, desde que IPs
-o dominios se permite y que IP vio Dropi en tu conexion. Si tu IP no esta en la lista:
+Si aun asi quieres usar el token, **Probar conexion** lo lee (solo localmente, sin enviarlo a ningun lado) y te dice
+el tipo, desde que IPs o dominios se permite y que IP vio Dropi en tu conexion. Si tu IP no esta en la lista, crea
+otra integracion con otro tipo, o pide a Dropi que autorice tu IP.
 
-1. Crea otra integracion con **otro tipo** de la lista, guarda, copia el token nuevo y vuelve a probar. Un token sin
-   lista de IPs funciona desde cualquier lugar.
-2. Si todos los tipos limitan la IP, escribe al soporte de Dropi pidiendo autorizar tu IP o un token para
-   "integracion propia por API". Si tu IP de casa cambia, lo estable es correr el Motor en un servidor con IP fija.
+**Seguridad:** si alguna vez pegaste un token de Dropi en un chat o lo compartiste, **borra esa integracion en
+Dropi > Mis Integraciones** y crea otra si la necesitas.
 
 ### Aprobar crea la orden en Dropi
 

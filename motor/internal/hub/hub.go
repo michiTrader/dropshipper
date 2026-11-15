@@ -5,6 +5,7 @@ package hub
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,12 +31,14 @@ type Hub struct {
 	// Tunnel is the ngrok public address for the webhooks (nil in the
 	// command-line tool). The hub opens or closes it with the settings.
 	Tunnel *tunnel.Manager
+	// Manager lets the hub save a renewed Dropi session (nil = not saved).
+	Manager *settings.Manager
 
 	mu    sync.RWMutex
 	cur   settings.Settings
 	wa    *whatsapp.Client
 	wompi *payments.Wompi
-	dropi *dropi.Client
+	dropi dropi.API
 }
 
 // New creates an empty hub.
@@ -45,16 +48,14 @@ func New() *Hub { return &Hub{AI: &llm.Switch{}} }
 func (h *Hub) Apply(s settings.Settings) {
 	h.mu.Lock()
 	h.cur = s
-	h.wa, h.wompi, h.dropi = nil, nil, nil
+	h.wa, h.wompi = nil, nil
 	if s.WhatsApp.UsesCloud() {
 		h.wa = whatsapp.New(s.WhatsApp.Token, s.WhatsApp.PhoneNumberID, s.WhatsApp.GraphVersion)
 	}
 	if s.Wompi.Enabled() {
 		h.wompi = payments.NewWompi(s.Wompi.PrivateKey, s.Wompi.EventsSecret, s.Wompi.Sandbox)
 	}
-	if s.Dropi.Enabled() {
-		h.dropi = dropi.New(s.Dropi.Token, s.Dropi.Sandbox)
-	}
+	h.applyDropiLocked(s.Dropi)
 	h.mu.Unlock()
 	h.Web.Configure(s.WhatsApp.UsesWeb(), nil)
 	h.Tunnel.Configure(s.Ngrok.Enabled, s.Ngrok.Token, s.Ngrok.Domain)
@@ -102,8 +103,68 @@ func (h *Hub) Wompi() *payments.Wompi {
 	return h.wompi
 }
 
-// Dropi returns the live Dropi client (nil when no token is set).
-func (h *Hub) Dropi() *dropi.Client {
+// applyDropiLocked picks the Dropi client: the MCP login wins over the REST
+// token. The same login keeps its live client (open session, tool cache).
+func (h *Hub) applyDropiLocked(d config.DropiConfig) {
+	switch {
+	case d.UsesMCP():
+		if cur, ok := h.dropi.(*dropi.MCPAPI); ok && cur.Identity() == d.MCPClientID+"|"+d.MCPTokenURL+"|"+dropi.MCPEndpoint {
+			return
+		}
+		id := d.MCPClientID
+		api := dropi.NewMCPAPI(dropi.MCPConfig{
+			URL:      dropi.MCPEndpoint,
+			ClientID: id,
+			TokenURL: d.MCPTokenURL,
+			Tokens:   dropi.Tokens{Access: d.MCPAccess, Refresh: d.MCPRefresh, Expires: d.MCPExpires},
+			OnTokens: func(t dropi.Tokens) { h.saveMCP(id, t) },
+		})
+		api.NeedLogin = func() { h.flagNeedLogin(id) }
+		h.dropi = api
+	case strings.TrimSpace(d.Token) != "":
+		h.dropi = dropi.New(d.Token, d.Sandbox)
+	default:
+		h.dropi = nil
+	}
+}
+
+// saveMCP stores a renewed Dropi session, unless the owner has logged in again
+// (another client id) in the meantime.
+func (h *Hub) saveMCP(clientID string, t dropi.Tokens) {
+	if h.Manager == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = h.Manager.Update(ctx, func(st *settings.Settings) error {
+		if st.Dropi.MCPClientID != clientID {
+			return errors.New("sesión reemplazada")
+		}
+		st.Dropi.MCPAccess, st.Dropi.MCPRefresh, st.Dropi.MCPExpires = t.Access, t.Refresh, t.Expires
+		st.Dropi.MCPStale = false
+		return nil
+	})
+}
+
+// flagNeedLogin records that Dropi no longer accepts the saved session, so the
+// panel can ask the owner to connect again.
+func (h *Hub) flagNeedLogin(clientID string) {
+	if h.Manager == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = h.Manager.Update(ctx, func(st *settings.Settings) error {
+		if st.Dropi.MCPClientID != clientID || st.Dropi.MCPStale {
+			return errors.New("sin cambios")
+		}
+		st.Dropi.MCPStale = true
+		return nil
+	})
+}
+
+// Dropi returns the live Dropi client (nil when neither a login nor a token is set).
+func (h *Hub) Dropi() dropi.API {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.dropi

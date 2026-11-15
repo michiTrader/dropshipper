@@ -50,6 +50,8 @@ type Server struct {
 	MediaDir string
 	Log      *log.Logger
 	Started  time.Time
+
+	logins mcpLogins // Dropi logins in progress
 }
 
 // Handler builds the HTTP routes.
@@ -61,6 +63,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /webhook/whatsapp", s.waVerify)
 	mux.HandleFunc("POST /webhook/whatsapp", s.waWebhook)
 	mux.HandleFunc("POST /webhook/wompi", s.wompiWebhook)
+	// Dropi sends the browser back here after the login; the one-use "state"
+	// created by the panel is the proof, so it needs no panel token.
+	mux.HandleFunc("GET /dropi/callback", s.dropiCallback)
 
 	// Panel API (admin token).
 	api := http.NewServeMux()

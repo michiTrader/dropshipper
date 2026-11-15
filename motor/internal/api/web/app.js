@@ -284,7 +284,7 @@ function setupSteps(st) {
     { done: pr.activos > 0 && pr.costo_confirmado >= pr.activos, required: false, title: 'Confirmar costos con el proveedor',
       desc: 'Pon el ID de Dropi de cada producto: el Motor trae solo el costo y el flete reales. Mientras no, la rentabilidad es estimada.', go: 'productos' },
     { done: !!(st.dropi && st.dropi.conectado), required: false, title: 'Conectar Dropi (opcional)',
-      desc: st.dropi && st.dropi.conectado ? 'Conectado: el Motor cotiza fletes reales y compara transportadoras' : 'Pega tu token de Dropi en Conexiones para cotizar fletes reales y traer los costos de tus productos.', go: 'conexiones' },
+      desc: st.dropi && st.dropi.conectado ? 'Conectado: el Motor cotiza fletes reales y compara transportadoras' : 'Pulsa «Conectar con Dropi» en Conexiones e inicia sesión: así el Motor cotiza fletes reales y trae los costos de tus productos.', go: 'conexiones' },
     { done: pg.listo, required: true, title: 'Definir cómo cobrar los anticipos',
       desc: pg.listo ? (pg.metodo === 'wompi' ? 'Wompi con confirmación automática' : 'Pago manual con comprobante') : 'Llave Bre-B o cuenta bancaria, o llaves de Wompi.', go: 'conexiones' },
     { done: wa.configurado, required: true, title: 'Conectar WhatsApp',

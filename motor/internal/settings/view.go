@@ -2,6 +2,7 @@ package settings
 
 import (
 	"strings"
+	"time"
 
 	"github.com/michiTrader/dropshipper/motor/internal/config"
 )
@@ -80,6 +81,10 @@ type DropiView struct {
 	OriginCity string `json:"origen_ciudad"`
 	Configured bool   `json:"configurado"`
 	BaseURL    string `json:"base_url"`
+	// MCP login (Conectar con Dropi).
+	MCPConnected  bool      `json:"mcp_conectado"`
+	MCPSince      time.Time `json:"mcp_desde,omitempty"`
+	MCPNeedsLogin bool      `json:"mcp_necesita_login"`
 }
 
 // DropiBase is the Dropi Integrations API base URL for the environment.
@@ -162,7 +167,8 @@ func (s Settings) PublicWith(tunnelURL, webhookBase string) View {
 		Sandbox: o.Sandbox, Configured: o.Enabled(), EventsURL: base + "/webhook/wompi"}
 	d := s.Dropi
 	v.Dropi = DropiView{Token: NewSecret(d.Token), Sandbox: d.Sandbox, OriginDept: d.OriginDept, OriginCity: d.OriginCity,
-		Configured: d.Enabled(), BaseURL: DropiBase(d.Sandbox)}
+		Configured: d.Enabled(), BaseURL: DropiBase(d.Sandbox),
+		MCPConnected: d.UsesMCP() && !d.MCPStale, MCPSince: d.MCPSince, MCPNeedsLogin: d.UsesMCP() && d.MCPStale}
 	v.Ngrok = NgrokView{Token: NewSecret(s.Ngrok.Token), Domain: s.Ngrok.Domain, Active: s.Ngrok.Enabled}
 	v.General = GeneralView{PublicURL: s.General.PublicURL, Token: NewSecret(s.General.AdminToken), WebhookURL: base + "/webhook/whatsapp", WebhookSource: source}
 	return v

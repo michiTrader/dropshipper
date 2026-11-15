@@ -370,7 +370,7 @@ func asList(v any) []any {
 	case []any:
 		return t
 	case map[string]any:
-		for _, k := range []string{"objects", "data", "result", "results", "items", "departments", "quotes"} {
+		for _, k := range []string{"objects", "data", "result", "results", "items", "departments", "quotes", "carriers", "transportadoras", "rates", "options", "opciones", "cotizaciones", "products", "productos", "orders", "ordenes", "cities", "ciudades", "departamentos"} {
 			if x, ok := t[k]; ok {
 				if l := asList(x); len(l) > 0 {
 					return l

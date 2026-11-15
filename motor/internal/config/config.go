@@ -205,8 +205,9 @@ type DropiConf struct {
 	Modo string `yaml:"modo" json:"modo"` // "manual" | "api"
 }
 
-// DropiConfig holds the Dropi Integrations API credentials (stored in the DB,
-// never in negocio.yaml).
+// DropiConfig holds the Dropi credentials (stored in the DB, never in
+// negocio.yaml). There are two ways in: the official MCP with a login
+// ("Conectar con Dropi", recommended) or the REST integration token.
 type DropiConfig struct {
 	// Token is the integration key from Dropi > Configuración > Integraciones.
 	Token string `json:"token"`
@@ -215,10 +216,40 @@ type DropiConfig struct {
 	// OriginDept / OriginCity is where the owner ships from (quote origin).
 	OriginDept string `json:"origen_departamento"`
 	OriginCity string `json:"origen_ciudad"`
+
+	// MCPClientID is the OAuth client Dropi registered for this Motor.
+	MCPClientID string `json:"mcp_client_id,omitempty"`
+	// MCPTokenURL is the OAuth token endpoint discovered at login.
+	MCPTokenURL string `json:"mcp_token_url,omitempty"`
+	// MCPRevokeURL revokes the session on disconnect (may be empty).
+	MCPRevokeURL string `json:"mcp_revoke_url,omitempty"`
+	// MCPAccess / MCPRefresh are the session tokens; MCPExpires is when the
+	// access token stops working (the Motor renews it with the refresh token).
+	MCPAccess  string    `json:"mcp_access,omitempty"`
+	MCPRefresh string    `json:"mcp_refresh,omitempty"`
+	MCPExpires time.Time `json:"mcp_expires,omitempty"`
+	// MCPSince is when the owner logged in.
+	MCPSince time.Time `json:"mcp_since,omitempty"`
+	// MCPStale is set when Dropi refused to renew the session: log in again.
+	MCPStale bool `json:"mcp_stale,omitempty"`
 }
 
-// Enabled reports whether the Dropi API can be called.
-func (d DropiConfig) Enabled() bool { return strings.TrimSpace(d.Token) != "" }
+// UsesMCP reports whether a Dropi login (MCP) is saved.
+func (d DropiConfig) UsesMCP() bool {
+	return strings.TrimSpace(d.MCPClientID) != "" && (strings.TrimSpace(d.MCPAccess) != "" || strings.TrimSpace(d.MCPRefresh) != "")
+}
+
+// Enabled reports whether the Dropi API can be called (login or token).
+func (d DropiConfig) Enabled() bool { return d.UsesMCP() || strings.TrimSpace(d.Token) != "" }
+
+// ClearMCP forgets the Dropi login but keeps everything else.
+func (d DropiConfig) ClearMCP() DropiConfig {
+	d.MCPClientID, d.MCPTokenURL, d.MCPRevokeURL = "", "", ""
+	d.MCPAccess, d.MCPRefresh = "", ""
+	d.MCPExpires, d.MCPSince = time.Time{}, time.Time{}
+	d.MCPStale = false
+	return d
+}
 
 // Transportadora is one carrier the owner can use through Dropi.
 type Transportadora struct {

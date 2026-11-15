@@ -28,6 +28,7 @@ func (s *Server) dropiRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/dropi/simular", s.simulateDropi)
 	api.HandleFunc("POST /api/productos/{sku}/costos-dropi", s.pullDropiCosts)
 	s.dropiOrderRoutes(api)
+	s.dropiMCPRoutes(api)
 }
 
 type dropiIn struct {
@@ -38,12 +39,14 @@ type dropiIn struct {
 }
 
 func (in dropiIn) apply(old config.DropiConfig) config.DropiConfig {
-	return config.DropiConfig{
-		Token:      keep(in.Token, old.Token),
-		Sandbox:    in.Sandbox,
-		OriginDept: strings.TrimSpace(in.OriginDept),
-		OriginCity: strings.TrimSpace(in.OriginCity),
-	}
+	// Start from the saved config: the Dropi login (MCP) is never typed in the
+	// form, so saving the form must not lose it.
+	out := old
+	out.Token = keep(in.Token, old.Token)
+	out.Sandbox = in.Sandbox
+	out.OriginDept = strings.TrimSpace(in.OriginDept)
+	out.OriginCity = strings.TrimSpace(in.OriginCity)
+	return out
 }
 
 func (s *Server) putDropi(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +71,10 @@ func (s *Server) putDropi(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// delDropi forgets everything about the Dropi connection (login and token),
+// keeping only the sandbox choice and the origin city.
 func (s *Server) delDropi(w http.ResponseWriter, r *http.Request) {
+	s.revokeSession(r.Context(), s.Settings.Get().Dropi)
 	if s.update(w, r, func(st *settings.Settings) error {
 		st.Dropi = config.DropiConfig{Sandbox: st.Dropi.Sandbox, OriginDept: st.Dropi.OriginDept, OriginCity: st.Dropi.OriginCity}
 		st.Negocio.Dropi.Modo = "manual"
@@ -80,10 +86,24 @@ func (s *Server) delDropi(w http.ResponseWriter, r *http.Request) {
 
 func dropiAdvice(err error) string { return dropiAdviceTok(err, "") }
 
+// DropiAdvice explains a Dropi failure in plain Spanish (used by the terminal too).
+func DropiAdvice(err error) string { return dropiAdviceTok(err, "") }
+
+// tokenOf returns the REST token of a client ("" for the MCP login).
+func tokenOf(c dropi.API) string {
+	if t, ok := c.(*dropi.Client); ok {
+		return t.Token
+	}
+	return ""
+}
+
 // dropiAdviceTok explains a Dropi failure in plain Spanish. With the token it
 // can also say WHY a token is rejected: Dropi ties some integration types to
 // allowed IPs, and answers a plain "Access denied" either way.
 func dropiAdviceTok(err error, token string) string {
+	if errors.Is(err, dropi.ErrNeedLogin) {
+		return err.Error()
+	}
 	var ae *dropi.APIError
 	if errors.As(err, &ae) && ae.IsAuth() {
 		msg := "Dropi rechazó el token (Access denied)."
@@ -125,19 +145,39 @@ func (s *Server) testDropi(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := in.apply(s.Settings.Get().Dropi)
 	if !cfg.Enabled() {
-		testFail(w, "Pega el token de integración de Dropi y vuelve a probar.")
+		testFail(w, "Pulsa «Conectar con Dropi» e inicia sesión (o, en opciones avanzadas, pega un token de integración) y vuelve a probar.")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), hub.TestTimeout)
 	defer cancel()
-	n, err := dropi.New(cfg.Token, cfg.Sandbox).Ping(ctx)
+	var (
+		n    int
+		err  error
+		mcp  bool
+		what = "departamentos disponibles"
+	)
+	if strings.TrimSpace(in.Token) == "" && cfg.UsesMCP() {
+		// The saved login: test the live client (it renews its own session).
+		c := s.Hub.Dropi()
+		if c == nil || c.Kind() != "mcp" {
+			testFail(w, "La sesión con Dropi aún no está lista; espera un momento y vuelve a probar.")
+			return
+		}
+		mcp, what = true, "herramientas disponibles"
+		n, err = c.Ping(ctx)
+	} else {
+		n, err = dropi.New(cfg.Token, cfg.Sandbox).Ping(ctx)
+	}
 	if err != nil {
 		testFail(w, dropiAdviceTok(err, cfg.Token))
 		return
 	}
 	msg := "Conectado a Dropi"
+	if mcp {
+		msg = "Conectado a Dropi con tu inicio de sesión"
+	}
 	if n > 0 {
-		msg += fmt.Sprintf(" (%d departamentos disponibles)", n)
+		msg += fmt.Sprintf(" (%d %s)", n, what)
 	}
 	if cfg.Sandbox {
 		msg += ". Estás en el entorno de pruebas: allí no hay transportadoras, así que no se pueden cotizar fletes; para eso usa el entorno real."
@@ -278,9 +318,11 @@ func (s *Server) Simulate(ctx context.Context, in ScenarioIn) (SimResult, error)
 	defer cancel()
 
 	if client == nil {
-		add("Conexión con Dropi", "error", "Falta el token de Dropi (Conexiones > Dropi).")
+		add("Conexión con Dropi", "error", "Falta conectar Dropi (Conexiones > Dropi > Conectar con Dropi).")
 	} else if n, err := client.Ping(ctx); err != nil {
-		add("Conexión con Dropi", "error", dropiAdviceTok(err, client.Token))
+		add("Conexión con Dropi", "error", dropiAdviceTok(err, tokenOf(client)))
+	} else if client.Kind() == "mcp" {
+		add("Conexión con Dropi", "ok", fmt.Sprintf("Sesión válida (%d herramientas).", n))
 	} else {
 		add("Conexión con Dropi", "ok", fmt.Sprintf("Token válido (%d departamentos).", n))
 	}
