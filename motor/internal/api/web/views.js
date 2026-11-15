@@ -16,7 +16,8 @@ function msgHTML(m, simulator) {
     body = `<i>[${esc(m.kind)}]</i>`;
   }
   const ticks = { enviado: 'enviado', delivered: 'entregado', read: 'leído', fallido: 'no se pudo enviar', failed: 'no entregado', simulado: '', sin_whatsapp: 'sin WhatsApp' }[m.status] ?? '';
-  const meta = [simulator && m.sender === 'cliente' ? '' : who, fmtTime(m.created_at), side === 'out' ? ticks : ''].filter(Boolean).join(' · ');
+  const late = m.status === 'tardio' ? 'llegó tarde: la IA no lo respondió' : '';
+  const meta = [simulator && m.sender === 'cliente' ? '' : who, fmtTime(m.created_at), side === 'out' ? ticks : late].filter(Boolean).join(' · ');
   return `<div class="msg ${side} ${esc(m.sender)}" data-id="${m.id}">${body}<span class="meta">${esc(meta)}</span></div>`;
 }
 

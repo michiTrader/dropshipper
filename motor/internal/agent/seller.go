@@ -417,6 +417,10 @@ Ayudar de verdad al cliente y cerrar la venta de forma natural y ética: entende
 			fmt.Fprintf(&b, " · guía %s (%s)", o.TrackingNumber, o.Carrier)
 		}
 		b.WriteString(". " + sales.StatusNote(o) + "\n")
+		if sales.Closed(o) {
+			b.WriteString("Ese pedido NO se va a enviar. Nunca le digas al cliente que va en camino, que lo recibirá ni que espere una guía. Si escribe \"sí\", \"ya\" o pregunta por su pedido, se refiere a ESTE pedido: explícale lo que pasó. Si pide intentarlo de nuevo, toma sus datos con guardar_datos_pedido como un pedido nuevo.\n")
+			return b.String()
+		}
 		b.WriteString("Si el cliente escribe \"sí\", \"ya\" o pregunta por su pedido, se refiere a ESTE pedido: dile en qué estado está y que debe esperar la guía. NO crees otro pedido. Solo si pide comprar otra vez, pregúntale de forma explícita si quiere un pedido adicional y, únicamente si lo confirma, usa guardar_datos_pedido con nuevo_pedido=true.\n")
 	} else {
 		b.WriteString("Sin pedidos todavía.\n")
@@ -429,6 +433,9 @@ Ayudar de verdad al cliente y cerrar la venta de forma natural y ética: entende
 func toLLMHistory(history []store.Message) []llm.Message {
 	var out []llm.Message
 	for _, m := range history {
+		if m.Status == store.MsgLate {
+			continue // delivered after the chat moved on: the AI never sees it
+		}
 		role, content := "assistant", m.Body
 		switch m.Sender {
 		case store.SenderCustomer:

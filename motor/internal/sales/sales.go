@@ -746,8 +746,13 @@ func (s *Service) Approve(ctx context.Context, orderID int64, by string) (store.
 }
 
 // Reject is the owner's "Rechazar" button. The customer is NOT messaged
-// automatically: the owner decides what to tell them.
+// automatically: the owner decides what to tell them. The reason is required
+// because the AI reads it to explain the situation when the customer asks.
 func (s *Service) Reject(ctx context.Context, orderID int64, reason, by string) (store.Order, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return store.Order{}, errors.New("escribe el motivo del rechazo: la IA lo usa para explicarle al cliente qué pasó")
+	}
 	s.mu.Lock()
 	o, err := s.Store.GetOrder(ctx, orderID)
 	if err != nil {
@@ -759,9 +764,8 @@ func (s *Service) Reject(ctx context.Context, orderID int64, reason, by string) 
 		return o, fmt.Errorf("el pedido #%d ya está en %s", o.ID, o.Status)
 	}
 	o.Status = store.OrderRejected
-	if reason != "" {
-		o.Notes = strings.TrimSpace(o.Notes + "\nRechazado: " + reason)
-	}
+	o.RejectReason = reason
+	o.Notes = strings.TrimSpace(o.Notes + "\nRechazado: " + reason)
 	o, err = s.Store.SaveOrder(ctx, o)
 	s.mu.Unlock()
 	if err != nil {
@@ -781,6 +785,7 @@ func (s *Service) Cancel(ctx context.Context, phone, reason, by string) (store.O
 		return o, fmt.Errorf("no hay pedido abierto para cancelar")
 	}
 	o.Status = store.OrderCancelled
+	o.RejectReason = strings.TrimSpace(reason)
 	o.Notes = strings.TrimSpace(o.Notes + "\nCancelado: " + reason)
 	o, err = s.Store.SaveOrder(ctx, o)
 	s.mu.Unlock()
@@ -1023,8 +1028,26 @@ func StatusNote(o store.Order) string {
 		return "Tiene una novedad con la transportadora; usa escalar_a_humano para que el dueño lo resuelva." + g
 	case store.OrderDelivered:
 		return "Ya fue entregado."
+	case store.OrderRejected:
+		return "El equipo NO aprobó este pedido: NO se va a enviar, no existe guía ni está en camino." + reasonNote(o) +
+			" Si el cliente pregunta, explícale con honestidad y tacto qué pasó usando ese motivo (sin inventar otros y sin culparlo); no digas que va en camino ni que espere la guía. Si el motivo se puede corregir (por ejemplo un dato o la zona), ofrécele intentarlo de nuevo; si no, escala con escalar_a_humano."
+	case store.OrderCancelled:
+		return "Este pedido fue cancelado: NO se va a enviar, no existe guía ni está en camino." + reasonNote(o) +
+			" Si el cliente pregunta, dile que está cancelado y por qué; no digas que va en camino. Si quiere comprar de nuevo, toma sus datos otra vez."
 	}
 	return ""
+}
+
+func reasonNote(o store.Order) string {
+	if r := strings.TrimSpace(o.RejectReason); r != "" {
+		return " Motivo anotado por el equipo: " + r + "."
+	}
+	return " El equipo no anotó un motivo: no lo inventes y usa escalar_a_humano para que el dueño le explique."
+}
+
+// Closed reports an order that ended without being shipped.
+func Closed(o store.Order) bool {
+	return o.Status == store.OrderRejected || o.Status == store.OrderCancelled
 }
 
 var (

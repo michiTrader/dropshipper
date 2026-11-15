@@ -187,6 +187,10 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumn("contacts", "archived", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	// Databases created before rejection reasons existed gain the column here.
+	if err := s.ensureColumn("orders", "reject_reason", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -409,6 +413,7 @@ func (s *Store) AddMessage(ctx context.Context, m Message) (Message, error) {
 	if m.CreatedAt.IsZero() {
 		m.CreatedAt = now()
 	}
+	m.CreatedAt = m.CreatedAt.UTC()
 	if m.Kind == "" {
 		m.Kind = "text"
 	}
@@ -423,11 +428,49 @@ func (s *Store) AddMessage(ctx context.Context, m Message) (Message, error) {
 	}
 	m.ID, _ = res.LastInsertId()
 	if m.Direction == DirIn {
-		_, err = s.db.ExecContext(ctx, `UPDATE contacts SET last_message_at = ?, last_inbound_at = ?, unread = unread + 1 WHERE phone = ?`, m.CreatedAt, m.CreatedAt, m.Phone)
+		// A message delivered late carries an old timestamp: it must not move
+		// the chat's "last activity" backwards. Compared in Go because the
+		// stored times are text and may carry different zones.
+		c, gerr := s.GetContact(ctx, m.Phone)
+		if gerr != nil {
+			return m, gerr
+		}
+		lm, li := m.CreatedAt, m.CreatedAt
+		if c.LastMessageAt != nil && c.LastMessageAt.After(lm) {
+			lm = *c.LastMessageAt
+		}
+		if c.LastInboundAt != nil && c.LastInboundAt.After(li) {
+			li = *c.LastInboundAt
+		}
+		_, err = s.db.ExecContext(ctx, `UPDATE contacts SET last_message_at = ?, last_inbound_at = ?, unread = unread + 1 WHERE phone = ?`, lm.UTC(), li.UTC(), m.Phone)
 	} else {
 		_, err = s.db.ExecContext(ctx, `UPDATE contacts SET last_message_at = ? WHERE phone = ?`, m.CreatedAt, m.Phone)
 	}
 	return m, err
+}
+
+// MsgLate marks an inbound message that reached the Motor long after it was
+// written (WhatsApp delivered it late, e.g. after the Motor was off). It is
+// stored for the owner to see but the AI never answers it nor reads it.
+const MsgLate = "tardio"
+
+// LatestMessageAt returns the creation time of the newest message of a chat
+// (any direction); ok is false for an empty chat.
+func (s *Store) LatestMessageAt(ctx context.Context, phone string) (time.Time, bool) {
+	ms, err := s.RecentMessages(ctx, phone, 30)
+	if err != nil || len(ms) == 0 {
+		return time.Time{}, false
+	}
+	var latest time.Time
+	for _, m := range ms {
+		if m.Status == MsgLate {
+			continue // a late message says nothing about where the chat is now
+		}
+		if m.CreatedAt.After(latest) {
+			latest = m.CreatedAt
+		}
+	}
+	return latest, !latest.IsZero()
 }
 
 // UpdateMessageStatus updates delivery status by WhatsApp id.
