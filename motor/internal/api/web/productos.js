@@ -100,7 +100,7 @@ function drawProduct(root) {
     <div data-pane="ficha">
       <div class="card"><div class="card-head"><div><h3>Datos del producto</h3><div class="desc">Lo que la IA sabe para presentarlo con precisión. No inventa nada que no esté aquí.</div></div></div>
         <div class="fgrid">
-          <label class="field"><span>Código (SKU)</span><input data-f="sku" value="${esc(p.sku)}" ${PS.isNew ? '' : 'readonly'} placeholder="MI-PRODUCTO-60"><small>${PS.isNew ? 'Único. Letras, números y guiones.' : 'El código no se puede cambiar.'}</small></label>
+          <label class="field"><span>Código (SKU)</span><input data-f="sku" value="${esc(p.sku)}" ${PS.isNew ? '' : 'readonly'} placeholder="MI-PRODUCTO-60"><small>${PS.isNew ? 'Único. Letras, números y guiones.' : 'El código no se puede cambiar.'} Es solo tu código interno: no tiene que ser igual al de Dropi (el que cuenta es «ID del producto en Dropi»).</small></label>
           ${fld('nombre', 'Nombre', p.nombre).replace('name="nombre"', 'data-f="nombre"')}
           <label class="field"><span>Categoría</span><input data-f="categoria" value="${esc(p.categoria)}"></label>
           <label class="field"><span>Presentación</span><input data-f="presentacion" value="${esc(p.presentacion)}" placeholder="Frasco x 60 unidades"></label>

@@ -259,8 +259,8 @@ function drawDropi() {
     ${dropiMcpBlock(d)}
     <form id="dpForm" autocomplete="off">
       <div class="fgrid">
-        ${fld('origen_departamento', 'Departamento de origen', d.origen_departamento, { ph: 'Antioquia', help: 'Desde donde sale tu mercancía (bodega del proveedor o la tuya).' })}
-        ${fld('origen_ciudad', 'Ciudad de origen', d.origen_ciudad, { ph: 'Medellín', help: 'Se usa para cotizar el flete hacia cada destino.' })}
+        ${(d.mcp_conectado || d.mcp_necesita_login) ? `<div class="full small muted">No necesitas indicar ciudad de origen: con tu inicio de sesión, Dropi cotiza el flete desde la bodega de cada proveedor hasta la ciudad del cliente.</div>` : `${fld('origen_departamento', 'Departamento de origen', d.origen_departamento, { ph: 'Antioquia', help: 'Solo para el token de integración: desde donde sale la mercancía (bodega del proveedor).' })}
+        ${fld('origen_ciudad', 'Ciudad de origen', d.origen_ciudad, { ph: 'Medellín', help: 'Solo para el token de integración; con «Conectar con Dropi» no hace falta.' })}`}
         <details class="full" ${d.token.configurada ? 'open' : ''}><summary class="small muted" style="cursor:pointer">Opciones avanzadas: usar un token de integración en lugar del inicio de sesión</summary>
           <label class="field full" style="margin-top:8px"><span>Token de integración de Dropi</span>
             <input class="secret-input" name="token" type="password" autocomplete="new-password" readonly data-lpignore="true" data-1p-ignore placeholder="${d.token.configurada ? 'Sin cambios' : 'Pega aquí el token completo'}">

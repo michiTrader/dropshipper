@@ -18,6 +18,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -240,6 +242,8 @@ type Product struct {
 	Cost      int64  `json:"costo"`
 	SalePrice int64  `json:"precio_sugerido"`
 	Stock     int64  `json:"stock"`
+	// Variations counts the product's variations (0 = a SIMPLE product).
+	Variations int `json:"-"`
 }
 
 // Product reads a product by its Dropi id.
@@ -462,16 +466,42 @@ func parseQuotes(raw []byte) []Quote {
 		if inner, ok := m["objects"].(map[string]any); ok {
 			m = inner
 		}
-		name := str(m, "distribution_company", "transportadora", "carrier", "company", "name", "nombre")
-		price := num(m, "shipping_amount", "shippingAmount", "flete", "precio", "price", "valor", "amount", "cost", "total")
+		name := str(m, "distribution_company", "transportadora", "carrier", "carrier_name", "company", "courier", "name", "nombre", "service")
+		// A carrier that could not quote has shipping_cost null and an error.
+		price := num(m, "shipping_cost", "shippingCost", "shipping_amount", "shippingAmount", "flete", "precio", "price", "valor", "amount", "cost", "total")
 		if name == "" || price <= 0 {
 			continue
 		}
 		days := int(num(m, "delivery_days", "deliveryDays", "dias_entrega", "tiempo_entrega", "days", "estimated_days", "estimatedDays", "delivery_time", "deliveryTime", "tiempo_estimado"))
+		if days == 0 {
+			days = daysFrom(m["trajectory"])
+		}
 		if days < 0 || days > 60 {
 			days = 0
 		}
 		out = append(out, Quote{Carrier: name, Freight: price, Days: days})
 	}
 	return out
+}
+
+var daysRe = regexp.MustCompile(`(?i)(\d+)(?:\s*(?:-|a|to|y)\s*(\d+))?\s*(?:d[ií]as?|days?|dh)`)
+
+// daysFrom reads a delivery time out of Dropi's "trajectory" (a number, or a
+// text like "2-4 días").
+func daysFrom(v any) int {
+	switch t := v.(type) {
+	case float64:
+		return int(t + 0.5)
+	case string:
+		if m := daysRe.FindStringSubmatch(t); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			if m[2] != "" {
+				n, _ = strconv.Atoi(m[2])
+			}
+			return n
+		}
+	case map[string]any:
+		return int(num(t, "days", "dias", "delivery_days", "max_days", "min_days"))
+	}
+	return 0
 }
