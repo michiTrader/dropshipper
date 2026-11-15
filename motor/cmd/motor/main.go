@@ -107,6 +107,7 @@ func serve(dir string, lg *log.Logger) error {
 	}
 
 	h := hub.New()
+	h.Manager = a.set
 	mediaDir := filepath.Join(cfg.DataDir, "media")
 	// WhatsApp Web (linked phone). It stays idle until that channel is selected.
 	h.Web = whatsweb.New(cfg.DataDir, mediaDir, lg)
@@ -202,7 +203,8 @@ func serve(dir string, lg *log.Logger) error {
 	a.set.OnChange(func(s settings.Settings) {
 		key := ""
 		if s.Dropi.Enabled() {
-			key = fmt.Sprintf("%s|%v|%s|%s", s.Dropi.Token, s.Dropi.Sandbox, s.Dropi.OriginDept, s.Dropi.OriginCity)
+			// A renewed session (new tokens) must not trigger a new sync; a new login does.
+			key = fmt.Sprintf("%s|%v|%s|%s|%s|%v", s.Dropi.Token, s.Dropi.Sandbox, s.Dropi.OriginDept, s.Dropi.OriginCity, s.Dropi.MCPClientID, s.Dropi.MCPStale)
 		}
 		if key == lastDropiKey {
 			return

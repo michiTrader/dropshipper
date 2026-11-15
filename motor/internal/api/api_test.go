@@ -56,6 +56,7 @@ func newEnv(t *testing.T, token string) *env {
 		t.Fatal(err)
 	}
 	h := hub.New()
+	h.Manager = set
 	live := config.NewLive(set.Get().Negocio)
 	set.OnChange(func(s settings.Settings) { h.Apply(s); live.Set(s.Negocio) })
 	ship := &shipping.Service{

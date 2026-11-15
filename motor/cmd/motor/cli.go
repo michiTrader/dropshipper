@@ -56,6 +56,9 @@ Uso:  motor [-dir CARPETA] [comando]
 
   dropi                    conexion con Dropi (fletes, costos, simulacion)
     dropi ver | probar | quitar
+    dropi mcp [herramientas]   que ofrece el MCP de Dropi y si el Motor sabe usarlo
+    dropi mcp llamar HERRAMIENTA [JSON]   ejecuta una herramienta a mano (solo consultas)
+    (la conexion normal se hace en el panel: Conexiones > Dropi > Conectar con Dropi)
     dropi configurar [--token T|-] [--ciudad-origen C] [--departamento-origen D]
                      [--produccion | --pruebas]
     dropi cotizar  --ciudad C [--departamento D] [--producto SKU] [--oferta ID]
@@ -240,12 +243,14 @@ func (c *cli) estado() error {
 	pagosOK := (n.Pagos.Metodo == "wompi" && s.Wompi.Enabled()) ||
 		(n.Pagos.Metodo == "manual" && (n.Pagos.Manual.LlaveBreB != "" || n.Pagos.Manual.NumeroCuenta != ""))
 	switch {
+	case s.Dropi.UsesMCP() && s.Dropi.MCPStale:
+		c.p("%s Dropi: la sesion vencio; vuelve a pulsar Conectar con Dropi en el panel", mark(false))
 	case s.Dropi.Enabled() && s.Dropi.OriginCity != "":
 		c.p("%s Dropi: conectado (%s), origen %s", mark(true), map[bool]string{true: "pruebas", false: "produccion"}[s.Dropi.Sandbox], s.Dropi.OriginCity)
 	case s.Dropi.Enabled():
 		c.p("%s Dropi: conectado pero falta la ciudad de origen (motor dropi configurar --ciudad-origen ...)", mark(false))
 	default:
-		c.p("%s Dropi: sin conectar; los fletes son estimados (motor dropi configurar --token -)", mark(false))
+		c.p("%s Dropi: sin conectar; los fletes son estimados (panel > Conexiones > Dropi > Conectar con Dropi)", mark(false))
 	}
 	c.p("%s Pagos anticipados: %s", mark(pagosOK), n.Pagos.Metodo)
 	act := c.cat.Active()

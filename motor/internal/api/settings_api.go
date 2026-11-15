@@ -626,6 +626,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			"llave_bre_b": n.Pagos.Manual.LlaveBreB != "", "cuenta": n.Pagos.Manual.NumeroCuenta != "",
 		},
 		"dropi": map[string]any{"modo": n.Dropi.Modo, "conectado": s.Hub.Dropi() != nil, "sandbox": st.Dropi.Sandbox,
+			"mcp": st.Dropi.UsesMCP() && !st.Dropi.MCPStale, "mcp_necesita_login": st.Dropi.UsesMCP() && st.Dropi.MCPStale,
 			"origen": strings.TrimSpace(st.Dropi.OriginCity + " " + st.Dropi.OriginDept)},
 		"productos":      map[string]any{"total": len(prods), "activos": active, "costo_confirmado": confirmed},
 		"autonomia":      n.Autonomia,
