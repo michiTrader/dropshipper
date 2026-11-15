@@ -371,6 +371,7 @@ function orderKV(o) {
     <dt>Barrio / ciudad</dt><dd>${esc(o.neighborhood || '-')} · ${esc(o.city || '-')}, ${esc(o.department || '-')}</dd>
     <dt>Transportadora</dt><dd>${esc(o.carrier || '-')} ${deliveryTag(o)} ${carrierSrc(o)}</dd>
     <dt>Regla de zona</dt><dd class="small">${esc(o.zone_reason || '-')}</dd>
+    ${o.reject_reason ? `<dt>Motivo</dt><dd class="small"><b>${esc(o.reject_reason)}</b></dd>` : ''}
     ${o.notes ? `<dt>Notas</dt><dd class="small">${esc(o.notes)}</dd>` : ''}
   </dl>`;
 }
@@ -532,7 +533,12 @@ function bindOrderButtons(root, orders) {
     on('[data-dropi-create]', (b) => act(b, async () => { const r = await post(`/api/pedidos/${o.id}/crear-en-dropi`); if (r.dropi) toast(r.dropi.mensaje); }, `Pedido #${o.id} creado en Dropi.`));
     on('[data-payok]', (b) => { if (confirm(`¿Confirmas que recibiste ${cop(o.advance_amount)} en tu cuenta?`)) act(b, () => post(`/api/pedidos/${o.id}/pago-confirmado`), 'Pago confirmado.'); });
     on('[data-paybad]', (b) => act(b, () => post(`/api/pedidos/${o.id}/pago-rechazado`), 'Comprobante marcado como no válido. Escríbele al cliente.'));
-    on('[data-reject]', (b) => { const m = prompt('Motivo (no se envía al cliente):', ''); if (m !== null) act(b, () => post(`/api/pedidos/${o.id}/rechazar`, { motivo: m }), 'Pedido rechazado.'); });
+    on('[data-reject]', (b) => {
+      const m = prompt('¿Por qué lo rechazas? (obligatorio). No se envía solo al cliente, pero la IA lo lee para explicárselo si él pregunta:', '');
+      if (m === null) return;
+      if (!m.trim()) { toast('Escribe el motivo: la IA lo necesita para explicarle al cliente.', true); return; }
+      act(b, () => post(`/api/pedidos/${o.id}/rechazar`, { motivo: m.trim() }), 'Pedido rechazado. La IA ya conoce el motivo.');
+    });
     on('[data-edit]', () => openEditOrder(o));
     on('[data-dispatch]', () => openDispatch(o));
     on('[data-copy]', () => copyForDropi(o));

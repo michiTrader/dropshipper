@@ -135,9 +135,14 @@ func (e *Engine) HandleInbound(ctx context.Context, in Inbound) error {
 	if _, err := e.Store.EnsureContact(ctx, in.Phone, in.Name, in.Simulated); err != nil {
 		return err
 	}
+	late := e.isLate(ctx, in)
+	status := ""
+	if late {
+		status = store.MsgLate
+	}
 	msg, err := e.Store.AddMessage(ctx, store.Message{
 		Phone: in.Phone, Direction: store.DirIn, Sender: store.SenderCustomer,
-		Kind: in.Kind, Body: in.Text, MediaPath: in.MediaPath, WAID: in.WAID, CreatedAt: in.At,
+		Kind: in.Kind, Body: in.Text, MediaPath: in.MediaPath, WAID: in.WAID, CreatedAt: in.At, Status: status,
 	})
 	if errors.Is(err, store.ErrDuplicate) {
 		return nil // Meta retried the webhook: already handled.
@@ -146,6 +151,17 @@ func (e *Engine) HandleInbound(ctx context.Context, in Inbound) error {
 		return err
 	}
 	e.Events.Publish(Event{Type: "mensaje", Phone: in.Phone, ID: msg.ID})
+	if late {
+		// WhatsApp delivered it long after it was written (the Motor was off
+		// or offline) and the chat has moved on: answering now would be an
+		// out-of-the-blue reply. The owner sees it and decides.
+		e.Store.Audit(ctx, in.Phone, "sistema", "mensaje_tardio",
+			"Llegó tarde (escrito "+in.At.Local().Format("02/01 15:04")+"); la IA no lo respondió porque la conversación ya avanzó.")
+		_, _ = e.Store.AddAlert(ctx, store.Alert{Phone: in.Phone, Kind: store.AlertInfo,
+			Message: "Un mensaje del cliente llegó tarde (lo escribió el " + in.At.Local().Format("02/01 15:04") + ", con el Motor apagado). La IA no lo respondió porque la conversación ya siguió; revísalo."})
+		e.Events.Publish(Event{Type: "alerta", Phone: in.Phone})
+		return nil
+	}
 
 	if in.Kind == "image" || in.Kind == "document" {
 		if o, ok, err := e.Sales.RegisterProof(ctx, in.Phone, in.MediaPath); err != nil {
@@ -178,6 +194,22 @@ func (e *Engine) HandleInbound(ctx context.Context, in Inbound) error {
 	}
 	e.schedule(in.Phone)
 	return nil
+}
+
+// LateAfter is how much older than the newest message of a chat an inbound
+// message must be to count as "late" (WhatsApp times have 1 s resolution and
+// the owner's own messages are stamped by this machine, so a small gap is normal).
+const LateAfter = 45 * time.Second
+
+// isLate reports a customer message that WhatsApp delivered after the chat
+// already moved on: its own timestamp is older than something already in the
+// conversation (an answer, or a newer customer message).
+func (e *Engine) isLate(ctx context.Context, in Inbound) bool {
+	if in.At.IsZero() || in.Simulated {
+		return false
+	}
+	latest, ok := e.Store.LatestMessageAt(ctx, in.Phone)
+	return ok && latest.Sub(in.At) > LateAfter
 }
 
 // schedule (re)starts the debounce timer of a phone.

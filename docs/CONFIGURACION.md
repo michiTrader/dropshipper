@@ -247,6 +247,13 @@ En **Ajustes** cambias, sin reiniciar:
 - **No duplica pedidos**: si el cliente ya tiene un pedido aprobado o en camino y vuelve a escribir "si" o "mandame la
   guia", la IA le explica el estado (por ejemplo, que la guia llega cuando tu la registres). Solo crea un segundo
   pedido cuando el cliente confirma de forma explicita que quiere **otro**.
+- **Pedido rechazado = la IA lo sabe**: al pulsar *Rechazar* (o *Cancelar pedido*) el panel te pide el **motivo** y es
+  obligatorio. Se guarda en el pedido (tarjeta, campo "Motivo") y la IA lo lee: si el cliente pregunta por su pedido, le
+  explica con tacto que no se va a enviar y por que, en vez de decirle que va en camino. El motivo no se le manda solo al
+  cliente; tu decides si escribirle (tomando el chat con "Yo tomo") o dejar que la IA responda cuando pregunte.
+- **Mensajes que llegan tarde**: si WhatsApp entrega un mensaje mucho despues de escrito (por ejemplo, el Motor estaba
+  apagado) y la conversacion ya avanzo, el Motor lo guarda marcado "llego tarde", **la IA no lo responde ni lo lee**, y
+  te sale un aviso para que lo revises. Asi el cliente no recibe una respuesta "de la nada".
 
 ---
 

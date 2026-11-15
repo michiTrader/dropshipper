@@ -39,42 +39,45 @@ const (
 
 // Order is a sale being prepared or shipped.
 type Order struct {
-	ID               int64      `json:"id"`
-	Phone            string     `json:"phone"`
-	Status           string     `json:"status"`
-	ProductSKU       string     `json:"product_sku"`
-	ProductName      string     `json:"product_name"`
-	OfferID          string     `json:"offer_id"`
-	OfferLabel       string     `json:"offer_label"`
-	Units            int        `json:"units"`
-	Total            int64      `json:"total"`
-	CustomerName     string     `json:"customer_name"`
-	CustomerIDNumber string     `json:"customer_id_number"`
-	CustomerPhone    string     `json:"customer_phone"`
-	Department       string     `json:"department"`
-	City             string     `json:"city"`
-	Neighborhood     string     `json:"neighborhood"`
-	Address          string     `json:"address"`
-	AddressRefs      string     `json:"address_refs"`
-	Email            string     `json:"email"`
-	Risk             string     `json:"risk"`
-	PaymentPolicy    string     `json:"payment_policy"`
-	AdvanceAmount    int64      `json:"advance_amount"`
-	CODAmount        int64      `json:"cod_amount"`
-	PaymentStatus    string     `json:"payment_status"`
-	PaymentRef       string     `json:"payment_ref"`
-	PaymentLink      string     `json:"payment_link"`
-	PaymentProof     string     `json:"payment_proof"`
-	Carrier          string     `json:"carrier"`
-	ZoneReason       string     `json:"zone_reason"`
-	ProfitJSON       string     `json:"profit_json"`
-	Notes            string     `json:"notes"`
-	DropiOrderID     string     `json:"dropi_order_id"`
-	TrackingNumber   string     `json:"tracking_number"`
-	ConfirmedAt      *time.Time `json:"confirmed_at"`
-	ApprovedAt       *time.Time `json:"approved_at"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID               int64  `json:"id"`
+	Phone            string `json:"phone"`
+	Status           string `json:"status"`
+	ProductSKU       string `json:"product_sku"`
+	ProductName      string `json:"product_name"`
+	OfferID          string `json:"offer_id"`
+	OfferLabel       string `json:"offer_label"`
+	Units            int    `json:"units"`
+	Total            int64  `json:"total"`
+	CustomerName     string `json:"customer_name"`
+	CustomerIDNumber string `json:"customer_id_number"`
+	CustomerPhone    string `json:"customer_phone"`
+	Department       string `json:"department"`
+	City             string `json:"city"`
+	Neighborhood     string `json:"neighborhood"`
+	Address          string `json:"address"`
+	AddressRefs      string `json:"address_refs"`
+	Email            string `json:"email"`
+	Risk             string `json:"risk"`
+	PaymentPolicy    string `json:"payment_policy"`
+	AdvanceAmount    int64  `json:"advance_amount"`
+	CODAmount        int64  `json:"cod_amount"`
+	PaymentStatus    string `json:"payment_status"`
+	PaymentRef       string `json:"payment_ref"`
+	PaymentLink      string `json:"payment_link"`
+	PaymentProof     string `json:"payment_proof"`
+	Carrier          string `json:"carrier"`
+	ZoneReason       string `json:"zone_reason"`
+	ProfitJSON       string `json:"profit_json"`
+	Notes            string `json:"notes"`
+	// RejectReason is why the owner rejected or cancelled the order. The AI
+	// reads it to explain the situation to the customer.
+	RejectReason   string     `json:"reject_reason"`
+	DropiOrderID   string     `json:"dropi_order_id"`
+	TrackingNumber string     `json:"tracking_number"`
+	ConfirmedAt    *time.Time `json:"confirmed_at"`
+	ApprovedAt     *time.Time `json:"approved_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // Open reports whether the order is still being worked on before shipping.
@@ -89,7 +92,7 @@ func (o Order) Open() bool {
 const orderCols = `id, phone, status, product_sku, product_name, offer_id, offer_label, units, total,
 	customer_name, customer_id_number, customer_phone, department, city, neighborhood, address, address_refs, email,
 	risk, payment_policy, advance_amount, cod_amount, payment_status, payment_ref, payment_link, payment_proof,
-	carrier, zone_reason, profit_json, notes, dropi_order_id, tracking_number, confirmed_at, approved_at, created_at, updated_at`
+	carrier, zone_reason, profit_json, notes, reject_reason, dropi_order_id, tracking_number, confirmed_at, approved_at, created_at, updated_at`
 
 func scanOrder(row interface{ Scan(...any) error }) (Order, error) {
 	var o Order
@@ -97,7 +100,7 @@ func scanOrder(row interface{ Scan(...any) error }) (Order, error) {
 	err := row.Scan(&o.ID, &o.Phone, &o.Status, &o.ProductSKU, &o.ProductName, &o.OfferID, &o.OfferLabel, &o.Units, &o.Total,
 		&o.CustomerName, &o.CustomerIDNumber, &o.CustomerPhone, &o.Department, &o.City, &o.Neighborhood, &o.Address, &o.AddressRefs, &o.Email,
 		&o.Risk, &o.PaymentPolicy, &o.AdvanceAmount, &o.CODAmount, &o.PaymentStatus, &o.PaymentRef, &o.PaymentLink, &o.PaymentProof,
-		&o.Carrier, &o.ZoneReason, &o.ProfitJSON, &o.Notes, &o.DropiOrderID, &o.TrackingNumber, &conf, &appr, &o.CreatedAt, &o.UpdatedAt)
+		&o.Carrier, &o.ZoneReason, &o.ProfitJSON, &o.Notes, &o.RejectReason, &o.DropiOrderID, &o.TrackingNumber, &conf, &appr, &o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return o, ErrNotFound
@@ -132,12 +135,12 @@ func (s *Store) SaveOrder(ctx context.Context, o Order) (Order, error) {
 		res, err := s.db.ExecContext(ctx, `INSERT INTO orders(phone, status, product_sku, product_name, offer_id, offer_label, units, total,
 			customer_name, customer_id_number, customer_phone, department, city, neighborhood, address, address_refs, email,
 			risk, payment_policy, advance_amount, cod_amount, payment_status, payment_ref, payment_link, payment_proof,
-			carrier, zone_reason, profit_json, notes, dropi_order_id, tracking_number, confirmed_at, approved_at, created_at, updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			carrier, zone_reason, profit_json, notes, reject_reason, dropi_order_id, tracking_number, confirmed_at, approved_at, created_at, updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			o.Phone, o.Status, o.ProductSKU, o.ProductName, o.OfferID, o.OfferLabel, o.Units, o.Total,
 			o.CustomerName, o.CustomerIDNumber, o.CustomerPhone, o.Department, o.City, o.Neighborhood, o.Address, o.AddressRefs, o.Email,
 			o.Risk, o.PaymentPolicy, o.AdvanceAmount, o.CODAmount, o.PaymentStatus, o.PaymentRef, o.PaymentLink, o.PaymentProof,
-			o.Carrier, o.ZoneReason, o.ProfitJSON, o.Notes, o.DropiOrderID, o.TrackingNumber, o.ConfirmedAt, o.ApprovedAt, o.CreatedAt, o.UpdatedAt)
+			o.Carrier, o.ZoneReason, o.ProfitJSON, o.Notes, o.RejectReason, o.DropiOrderID, o.TrackingNumber, o.ConfirmedAt, o.ApprovedAt, o.CreatedAt, o.UpdatedAt)
 		if err != nil {
 			return o, fmt.Errorf("crear pedido: %w", err)
 		}
@@ -147,12 +150,12 @@ func (s *Store) SaveOrder(ctx context.Context, o Order) (Order, error) {
 	_, err := s.db.ExecContext(ctx, `UPDATE orders SET phone=?, status=?, product_sku=?, product_name=?, offer_id=?, offer_label=?, units=?, total=?,
 		customer_name=?, customer_id_number=?, customer_phone=?, department=?, city=?, neighborhood=?, address=?, address_refs=?, email=?,
 		risk=?, payment_policy=?, advance_amount=?, cod_amount=?, payment_status=?, payment_ref=?, payment_link=?, payment_proof=?,
-		carrier=?, zone_reason=?, profit_json=?, notes=?, dropi_order_id=?, tracking_number=?, confirmed_at=?, approved_at=?, updated_at=?
+		carrier=?, zone_reason=?, profit_json=?, notes=?, reject_reason=?, dropi_order_id=?, tracking_number=?, confirmed_at=?, approved_at=?, updated_at=?
 		WHERE id=?`,
 		o.Phone, o.Status, o.ProductSKU, o.ProductName, o.OfferID, o.OfferLabel, o.Units, o.Total,
 		o.CustomerName, o.CustomerIDNumber, o.CustomerPhone, o.Department, o.City, o.Neighborhood, o.Address, o.AddressRefs, o.Email,
 		o.Risk, o.PaymentPolicy, o.AdvanceAmount, o.CODAmount, o.PaymentStatus, o.PaymentRef, o.PaymentLink, o.PaymentProof,
-		o.Carrier, o.ZoneReason, o.ProfitJSON, o.Notes, o.DropiOrderID, o.TrackingNumber, o.ConfirmedAt, o.ApprovedAt, o.UpdatedAt, o.ID)
+		o.Carrier, o.ZoneReason, o.ProfitJSON, o.Notes, o.RejectReason, o.DropiOrderID, o.TrackingNumber, o.ConfirmedAt, o.ApprovedAt, o.UpdatedAt, o.ID)
 	if err != nil {
 		return o, fmt.Errorf("actualizar pedido %d: %w", o.ID, err)
 	}
