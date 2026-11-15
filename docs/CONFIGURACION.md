@@ -319,9 +319,25 @@ Notas importantes:
   Si Dropi responde pero no se puede leer el numero de la orden, el aviso dice **REVISA en Dropi** antes de reintentar,
   para no duplicarla.
 
+Diagnostico (si el flete sale como estimado o una herramienta «pide datos que no sé llenar»). Debajo de
+**Ver herramientas** hay tres botones:
+
+- **Probar cotizacion**: hace una cotizacion real (solo lectura) a Medellin con tu primer producto y muestra
+  **exactamente lo que el Motor envio y lo que Dropi respondio**.
+- **Copiar esquemas**: copia al portapapeles los campos exactos que pide cada herramienta de Dropi. Pegalo en el chat
+  si algun campo sigue sin llenarse.
+- **Ver registro**: las ultimas llamadas al MCP (envio y respuesta). Los tokens se ocultan siempre. Cada llamada
+  tambien queda en la consola del Motor con el prefijo `dropi-mcp`.
+
+Para cotizar, Dropi pide el **producto** (su ID de Dropi, que se escribe en Productos), el id propio de la ciudad de
+destino (el Motor lo busca solo con la herramienta de ciudades del MCP y lo recuerda) y el tipo de tarifa
+(`CON RECAUDO` / `SIN RECAUDO`, segun el cliente pague contraentrega o no). Si un campo no se puede llenar, el aviso
+dice su nombre, su tipo y los valores permitidos.
+
 Por terminal (opcional): `motor dropi ver`, `motor dropi probar`, `motor dropi mcp herramientas` (el mismo informe
-de **Ver herramientas**) y `motor dropi mcp llamar HERRAMIENTA '{"campo":"valor"}'` para ejecutar a mano una
-consulta. La conexion en si siempre se hace desde el panel.
+de **Ver herramientas**), `motor dropi mcp esquemas` (los campos de cada herramienta), `motor dropi mcp registro
+[DEPARTAMENTO CIUDAD]` (cotiza y muestra lo enviado y lo recibido) y `motor dropi mcp llamar HERRAMIENTA
+'{"campo":"valor"}'` para ejecutar a mano una consulta. La conexion en si siempre se hace desde el panel.
 
 ### Alternativa avanzada: token de integracion
 

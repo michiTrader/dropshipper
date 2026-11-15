@@ -12,9 +12,10 @@ import (
 // order stays in "borrador". These checks catch both cases.
 
 var (
-	stallRe = regexp.MustCompile(`(?i)\b(d[eé]jame|perm[ií]teme|dame un momento|un momento|un segundito|voy a)\b[^.!?\n]{0,40}\b(verific|revis|consult|confirm|checar|chequear|validar|buscar)`)
-	claimRe = regexp.MustCompile(`(?i)(pedido|compra|orden)[^.!?\n]{0,30}(qued[oó]|est[aá]|ha quedado|fue|ya est[aá])[^.!?\n]{0,20}(confirmad|registrad|listo|aprobad)|(confirm[eé]|registr[eé]) (tu|su) (pedido|compra)|ya (confirm|registr)[eé]`)
-	yesRe   = regexp.MustCompile(`^(s[ií]+s*|sisas?|sip|claro|correcto|confirmo|confirmado|de una|dale|listo|ok|okay|perfecto|todo bien|todo correcto|as[ií] es|exacto|vale|obvio|por supuesto)( .*)?$`)
+	stallRe    = regexp.MustCompile(`(?i)\b(d[eé]jame|perm[ií]teme|dame un momento|un momento|un segundito|voy a)\b[^.!?\n]{0,40}\b(verific|revis|consult|confirm|checar|chequear|validar|buscar)`)
+	claimRe    = regexp.MustCompile(`(?i)(pedido|compra|orden)[^.!?\n]{0,30}(qued[oó]|est[aá]|ha quedado|fue|ya est[aá])[^.!?\n]{0,20}(confirmad|registrad|listo|aprobad)|(confirm[eé]|registr[eé]) (tu|su) (pedido|compra)|ya (confirm|registr)[eé]`)
+	negationRe = regexp.MustCompile(`(?i)\b(no|nunca|ni|todav[ií]a no|a[uú]n no|cancelad\w*|rechazad\w*)\b`)
+	yesRe      = regexp.MustCompile(`^(s[ií]+s*|sisas?|sip|claro|correcto|confirmo|confirmado|de una|dale|listo|ok|okay|perfecto|todo bien|todo correcto|as[ií] es|exacto|vale|obvio|por supuesto)( .*)?$`)
 )
 
 const nudgeStall = "[Aviso interno del sistema, el cliente no lo ve] Dijiste que ibas a verificar algo pero no hiciste nada. No hay nada que esperar: usa ahora la herramienta que corresponda (por ejemplo confirmar_pedido si el cliente ya dijo que sí al resumen) o responde directamente al cliente con la información que ya tienes. No anuncies acciones: hazlas."
@@ -27,8 +28,13 @@ func needsNudge(content string, called map[string]bool) string {
 	if c == "" {
 		return ""
 	}
-	if !called["confirmar_pedido"] && claimRe.MatchString(c) {
-		return nudgeClaim
+	if !called["confirmar_pedido"] {
+		for _, sen := range sentences(c) {
+			// "tu pedido no está confirmado" is the truth, not a false claim.
+			if claimRe.MatchString(sen) && !negationRe.MatchString(sen) {
+				return nudgeClaim
+			}
+		}
 	}
 	if len(c) < 280 && stallRe.MatchString(c) && !strings.Contains(c, "?") {
 		return nudgeStall

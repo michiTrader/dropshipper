@@ -34,6 +34,8 @@ type Quoter interface {
 // Scenario is one order to price.
 type Scenario struct {
 	Department, City string
+	// ProductID is the product's id in Dropi: the MCP quote asks for it.
+	ProductID        string
 	Price            int64 // order total
 	UnitCost         int64
 	Units            int
@@ -287,11 +289,16 @@ func (s *Service) freights(ctx context.Context, n config.Negocio, sc Scenario) (
 	if amount < 0 {
 		amount = 0
 	}
-	key := fmt.Sprintf("%s>%s|%v|%d", origin.DANE7(), dest.DANE7(), cod, amount)
+	units := sc.Units
+	if units < 1 {
+		units = 1
+	}
+	key := fmt.Sprintf("%s>%s|%v|%d|%s|%d", origin.DANE7(), dest.DANE7(), cod, amount, sc.ProductID, units)
 	quotes, hit := s.cached(key)
 	if !hit {
 		var err error
-		quotes, err = q.Quote(ctx, dropi.QuoteInput{COD: cod, Amount: amount, OriginDANE: origin.DANE7(), DestDANE: dest.DANE7()})
+		quotes, err = q.Quote(ctx, dropi.QuoteInput{COD: cod, Amount: amount, OriginDANE: origin.DANE7(), DestDANE: dest.DANE7(),
+			ProductID: strings.TrimSpace(sc.ProductID), Price: sc.Price / int64(units), Units: units})
 		if err != nil {
 			return nil, "Dropi no pudo cotizar el flete (" + err.Error() + "): se usa el flete estimado."
 		}
@@ -371,13 +378,13 @@ var ReferenceCities = [][2]string{
 // the average of the cheapest active carrier in each (rounded to $100) and how
 // many cities answered. It never falls back to an estimate: when Dropi cannot
 // quote, it returns 0 and the reason, so nothing is marked as confirmed.
-func (s *Service) ReferenceFreight(ctx context.Context, price int64) (int64, int, string) {
+func (s *Service) ReferenceFreight(ctx context.Context, productID string, price int64) (int64, int, string) {
 	n := s.neg()
 	var total int64
 	count := 0
 	reason := ""
 	for _, c := range ReferenceCities {
-		fs, warn := s.freights(ctx, n, Scenario{Department: c[0], City: c[1], Price: price, Policy: rules.PayCOD, Risk: rules.RiskNormal})
+		fs, warn := s.freights(ctx, n, Scenario{Department: c[0], City: c[1], ProductID: productID, Units: 1, Price: price, Policy: rules.PayCOD, Risk: rules.RiskNormal})
 		if len(fs) == 0 {
 			if reason == "" {
 				reason = warn

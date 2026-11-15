@@ -67,6 +67,9 @@ func (s *Server) dropiMCPRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/dropi/mcp/conectar", s.mcpConnect)
 	api.HandleFunc("POST /api/dropi/mcp/desconectar", s.mcpDisconnect)
 	api.HandleFunc("GET /api/dropi/mcp/herramientas", s.mcpTools)
+	api.HandleFunc("GET /api/dropi/mcp/esquemas", s.mcpSchemas)
+	api.HandleFunc("GET /api/dropi/mcp/registro", s.mcpCallLog)
+	api.HandleFunc("POST /api/dropi/mcp/probar-cotizacion", s.mcpTryQuote)
 }
 
 // mcpConnect starts the login: it finds Dropi's authorization server, registers
@@ -207,4 +210,65 @@ func (s *Server) mcpTools(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toolOut{t.Name, t.Description})
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "herramientas": out, "informe": rep})
+}
+
+// mcpSchemas returns every tool with its full input schema: the exact field
+// names Dropi expects. The owner can paste it to debug a field that is not
+// being filled.
+func (s *Server) mcpSchemas(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.Hub.Dropi().(*dropi.MCPAPI)
+	if !ok {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "Conecta Dropi con tu inicio de sesión primero (Conectar con Dropi)."})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*hub.TestTimeout)
+	defer cancel()
+	tools, err := c.Tools(ctx)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": dropiAdvice(err)})
+		return
+	}
+	type toolOut struct {
+		Name        string         `json:"nombre"`
+		Description string         `json:"descripcion"`
+		Schema      map[string]any `json:"esquema"`
+	}
+	out := make([]toolOut, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, toolOut{t.Name, t.Description, t.Schema})
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "herramientas": out})
+}
+
+// mcpCallLog returns the latest MCP calls: what the Motor sent and what Dropi
+// answered (credentials hidden).
+func (s *Server) mcpCallLog(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.Hub.Dropi().(*dropi.MCPAPI)
+	if !ok {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "Conecta Dropi con tu inicio de sesión primero (Conectar con Dropi)."})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "llamadas": c.CallLog()})
+}
+
+// mcpTryQuote runs a real freight quote (read only) with the owner's first
+// product, so the result and the exact call show up in the log.
+func (s *Server) mcpTryQuote(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Dept string `json:"departamento"`
+		City string `json:"ciudad"`
+		SKU  string `json:"sku"`
+	}
+	_ = readJSON(r, &in)
+	if strings.TrimSpace(in.City) == "" {
+		in.Dept, in.City = "Cundinamarca", "Bogotá"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*hub.TestTimeout)
+	defer cancel()
+	out, err := s.Quote(ctx, ScenarioIn{SKU: in.SKU, Dept: in.Dept, City: in.City})
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": dropiAdvice(err)})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "resultado": out})
 }
