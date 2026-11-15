@@ -321,7 +321,7 @@ func (s *Service) applyZone(ctx context.Context, o *store.Order, d rules.Decisio
 	var cmp shipping.Comparison
 	if s.Shipping != nil {
 		cmp = s.Shipping.Compare(ctx, shipping.Scenario{
-			Department: o.Department, City: o.City, Price: o.Total, UnitCost: p.UnitCost, Units: o.Units,
+			Department: o.Department, City: o.City, ProductID: p.DropiProductID, Price: o.Total, UnitCost: p.UnitCost, Units: o.Units,
 			EstimatedFreight: p.Freight, Risk: d.Risk, Policy: d.Policy, AdvancePaid: d.AdvanceAmount, ZoneCarriers: d.Carriers,
 		})
 		options, warn = cmp.Options, cmp.Warning

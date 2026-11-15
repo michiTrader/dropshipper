@@ -200,6 +200,10 @@ type QuoteInput struct {
 	Amount     int64  // declared value / amount to collect
 	OriginDANE string // 7-digit DANE
 	DestDANE   string // 7-digit DANE
+	// The MCP quote asks for the products being shipped (REST ignores these).
+	ProductID string // Dropi product id
+	Price     int64  // unit selling price
+	Units     int
 }
 
 // Quote is one carrier's price for a route.

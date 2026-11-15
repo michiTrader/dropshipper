@@ -251,6 +251,42 @@ func (c *cli) dropiMCP(args []string) error {
 			c.p("%s%s -> %s: %s", mark, r.Job, firstOr(r.Tool, "(ninguna)"), snippetText(r.Detail, 300))
 		}
 		return nil
+	case "esquemas":
+		// Full input schema of every tool: the exact field names Dropi expects.
+		tools, err := m.Tools(ctx)
+		if err != nil {
+			return errors.New(api.DropiAdvice(err))
+		}
+		b, _ := json.MarshalIndent(tools, "", " ")
+		c.p("%s", string(b))
+		return nil
+	case "registro":
+		// Makes a real (read only) quote and prints what was sent and answered.
+		srv, err := c.apiServer()
+		if err != nil {
+			return err
+		}
+		dept, city := "Antioquia", "Medellin"
+		if len(args) > 2 {
+			dept, city = args[1], args[2]
+		}
+		out, qerr := srv.Quote(ctx, api.ScenarioIn{Dept: dept, City: city})
+		if qerr != nil {
+			c.p("La cotizacion fallo: %s", qerr.Error())
+		} else {
+			j, _ := json.Marshal(out.Comparison)
+			c.p("Cotizacion: %s", string(j))
+		}
+		for _, l := range m.CallLog() {
+			c.p("")
+			c.p("[%s] %s (%d ms)", l.At.Format("15:04:05"), l.Tool, l.Millis)
+			c.p("  ENVIADO:   %s", l.Args)
+			c.p("  RESPUESTA: %s", l.Result)
+			if l.Err != "" {
+				c.p("  ERROR:     %s", l.Err)
+			}
+		}
+		return nil
 	case "llamar":
 		if len(args) < 2 {
 			return errors.New("uso: motor dropi mcp llamar HERRAMIENTA '{\"campo\":\"valor\"}'")
@@ -271,7 +307,7 @@ func (c *cli) dropiMCP(args []string) error {
 		}
 		return nil
 	}
-	return errors.New("uso: motor dropi mcp [herramientas | llamar HERRAMIENTA JSON]")
+	return errors.New("uso: motor dropi mcp [herramientas | esquemas | registro [DEPARTAMENTO CIUDAD] | llamar HERRAMIENTA JSON]")
 }
 
 func snippetText(s string, n int) string {

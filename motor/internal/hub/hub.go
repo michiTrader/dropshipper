@@ -5,6 +5,7 @@ package hub
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -118,6 +119,7 @@ func (h *Hub) applyDropiLocked(d config.DropiConfig) {
 			TokenURL: d.MCPTokenURL,
 			Tokens:   dropi.Tokens{Access: d.MCPAccess, Refresh: d.MCPRefresh, Expires: d.MCPExpires},
 			OnTokens: func(t dropi.Tokens) { h.saveMCP(id, t) },
+			Logf:     log.Printf,
 		})
 		api.NeedLogin = func() { h.flagNeedLogin(id) }
 		h.dropi = api

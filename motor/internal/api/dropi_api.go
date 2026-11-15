@@ -223,7 +223,7 @@ func (s *Server) scenarioFrom(in ScenarioIn) (catalog.Product, catalog.Offer, sh
 	}
 	d := s.Zones.Decide(rules.Destination{Department: in.Dept, City: in.City, Neighborhood: in.Hood}, offer.Price)
 	sc := shipping.Scenario{
-		Department: in.Dept, City: in.City, Price: offer.Price, UnitCost: p.UnitCost, Units: offer.Units,
+		Department: in.Dept, City: in.City, ProductID: p.DropiProductID, Price: offer.Price, UnitCost: p.UnitCost, Units: offer.Units,
 		EstimatedFreight: p.Freight, Risk: d.Risk, Policy: d.Policy, AdvancePaid: d.AdvanceAmount, ZoneCarriers: d.Carriers,
 	}
 	return p, offer, sc, d, nil
@@ -493,7 +493,7 @@ func (s *Server) SyncProduct(ctx context.Context, sku string) (SyncResult, error
 				offer = o
 			}
 		}
-		f, n, why := s.Shipping.ReferenceFreight(cctx, offer.Price)
+		f, n, why := s.Shipping.ReferenceFreight(cctx, p.DropiProductID, offer.Price/int64(max1(offer.Units)))
 		if n > 0 {
 			p.Freight, p.FreightConfirmed = f, true
 			res.Freight, res.FreightCities = f, n

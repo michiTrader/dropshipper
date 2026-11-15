@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,8 @@ type MCPConfig struct {
 	Tokens   Tokens
 	OnTokens func(Tokens)
 	HTTP     *http.Client
+	// Logf (optional) receives one line per tool call, for debugging.
+	Logf func(format string, args ...any)
 }
 
 // Tool is one tool the MCP server offers.
@@ -74,6 +77,9 @@ type MCPClient struct {
 	nextID  int
 	tools   []Tool
 	toolsAt time.Time
+
+	lmu  sync.Mutex
+	logs []CallLog
 }
 
 // NewMCP builds a client.
@@ -349,8 +355,10 @@ func (c *MCPClient) Call(ctx context.Context, name string, args map[string]any) 
 	if args == nil {
 		args = map[string]any{}
 	}
+	started := time.Now()
 	raw, err := c.send(ctx, "tools/call", map[string]any{"name": name, "arguments": args})
 	if err != nil {
+		c.record(name, args, "", err, started)
 		return ToolResult{}, err
 	}
 	var out struct {
@@ -362,6 +370,7 @@ func (c *MCPClient) Call(ctx context.Context, name string, args map[string]any) 
 		IsError    bool            `json:"isError"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
+		c.record(name, args, string(raw), err, started)
 		return ToolResult{}, fmt.Errorf("respuesta de la herramienta %s inválida: %w", name, err)
 	}
 	var texts []string
@@ -372,7 +381,59 @@ func (c *MCPClient) Call(ctx context.Context, name string, args map[string]any) 
 	}
 	res := ToolResult{Text: strings.Join(texts, "\n"), Structured: out.Structured, IsError: out.IsError}
 	if res.IsError {
-		return res, &MCPError{Message: firstText(snippet([]byte(res.Text)), "la herramienta "+name+" devolvió un error")}
+		merr := &MCPError{Message: firstText(snippet([]byte(res.Text)), "la herramienta "+name+" devolvió un error")}
+		c.record(name, args, string(res.JSON()), merr, started)
+		return res, merr
 	}
+	c.record(name, args, string(res.JSON()), nil, started)
 	return res, nil
+}
+
+// CallLog is one tool call as the Motor made it: what it sent and what came
+// back. It exists so a wrong or refused call can be understood from the panel.
+type CallLog struct {
+	At     time.Time `json:"hora"`
+	Tool   string    `json:"herramienta"`
+	Args   string    `json:"argumentos"`
+	Result string    `json:"respuesta"`
+	Err    string    `json:"error,omitempty"`
+	Millis int64     `json:"ms"`
+}
+
+const maxCallLogs = 40
+
+var secretRe = regexp.MustCompile(`(?i)(bearer\s+|"?(?:access_token|refresh_token|authorization|client_secret)"?\s*[:=]\s*"?)[A-Za-z0-9._\-~+/=]{8,}`)
+
+// redact hides anything that looks like a credential.
+func redact(s string) string { return secretRe.ReplaceAllString(s, "${1}[oculto]") }
+
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
+
+func (c *MCPClient) record(tool string, args map[string]any, result string, err error, started time.Time) {
+	ab, _ := json.Marshal(args)
+	e := CallLog{At: started, Tool: tool, Args: clip(redact(string(ab)), 2000), Result: clip(redact(result), 3000), Millis: time.Since(started).Milliseconds()}
+	if err != nil {
+		e.Err = clip(redact(err.Error()), 500)
+	}
+	c.lmu.Lock()
+	c.logs = append(c.logs, e)
+	if len(c.logs) > maxCallLogs {
+		c.logs = c.logs[len(c.logs)-maxCallLogs:]
+	}
+	c.lmu.Unlock()
+	if c.cfg.Logf != nil {
+		c.cfg.Logf("dropi-mcp %s args=%s ms=%d err=%q resp=%s", tool, e.Args, e.Millis, e.Err, clip(e.Result, 300))
+	}
+}
+
+// CallLog returns the most recent calls, oldest first.
+func (c *MCPClient) CallLog() []CallLog {
+	c.lmu.Lock()
+	defer c.lmu.Unlock()
+	return append([]CallLog(nil), c.logs...)
 }

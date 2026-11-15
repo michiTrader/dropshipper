@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/michiTrader/dropshipper/motor/internal/geo"
@@ -25,6 +26,9 @@ type MCPAPI struct {
 	C *MCPClient
 	// NeedLogin is called (if set) when the saved session can no longer be renewed.
 	NeedLogin func()
+
+	idMu sync.Mutex
+	ids  map[string]int64 // resolved Dropi city/department ids
 }
 
 var _ API = (*MCPAPI)(nil)
@@ -64,6 +68,9 @@ func (m *MCPAPI) Tools(ctx context.Context) ([]Tool, error) {
 	t, err := m.C.Tools(ctx, true)
 	return t, m.note(err)
 }
+
+// CallLog returns the latest tool calls (arguments sent, answer received).
+func (m *MCPAPI) CallLog() []CallLog { return m.C.CallLog() }
 
 // Call runs any tool (for diagnostics from the terminal).
 func (m *MCPAPI) Call(ctx context.Context, name string, args map[string]any) (ToolResult, error) {
@@ -167,8 +174,47 @@ func pickTool(tools []Tool, w toolWant) (Tool, bool) {
 // ---------- schema-driven arguments ----------
 
 type fillResult struct {
-	used    map[string]bool // which facts found a place
-	missing []string        // required fields nobody knows how to fill
+	used    map[string]bool   // which facts found a place
+	missing []string          // required fields nobody knows how to fill
+	hints   map[string]string // what each missing field wants (type, values)
+}
+
+// miss records a required field that cannot be filled, with what it wants.
+func (r *fillResult) miss(path []string, sub map[string]any) {
+	name := strings.Join(path, ".")
+	r.missing = append(r.missing, name)
+	if h := hintOf(sub); h != "" {
+		if r.hints == nil {
+			r.hints = map[string]string{}
+		}
+		r.hints[name] = h
+	}
+}
+
+func hintOf(sub map[string]any) string {
+	if sub == nil {
+		return ""
+	}
+	parts := []string{typeOf(sub)}
+	if e := enumOf(sub); len(e) > 0 {
+		parts = append(parts, "valores: "+strings.Join(e, "/"))
+	}
+	if d, ok := sub["description"].(string); ok && strings.TrimSpace(d) != "" {
+		parts = append(parts, clip(strings.Join(strings.Fields(d), " "), 80))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// missingText lists the missing fields with what each one wants.
+func (r fillResult) missingText() string {
+	out := make([]string, len(r.missing))
+	for i, n := range r.missing {
+		out[i] = n
+		if h := r.hints[n]; h != "" {
+			out[i] = n + " (" + h + ")"
+		}
+	}
+	return strings.Join(out, ", ")
 }
 
 func typeOf(s map[string]any) string {
@@ -223,6 +269,9 @@ func classify(toks []string, typ string, inProduct bool) string {
 	case inProduct && has(toks, "name", "nombre", "title", "titulo"):
 		return "product_name"
 	case has(toks, "product", "products", "producto", "productos", "sku", "item", "items", "articulo") && !has(toks, "price", "precio", "name", "nombre"):
+		if has(toks, "type", "tipo") && !has(toks, "id") {
+			return "product_type"
+		}
 		return "product_id"
 	case inProduct && has(toks, "price", "precio", "valor", "unitprice"):
 		return "price"
@@ -234,13 +283,17 @@ func classify(toks []string, typ string, inProduct bool) string {
 		return "notes"
 	case has(toks, "country", "pais"):
 		return "country"
+	case has(toks, "city", "ciudad", "municipio") && has(toks, "id") && !has(toks, "dane", "code", "codigo"):
+		return side + ".cityid"
+	case has(toks, "state", "departamento", "department", "dept") && has(toks, "id") && typ != "boolean" && !has(toks, "dane", "code", "codigo"):
+		return side + ".deptid"
 	case has(toks, "dane") || (has(toks, "code", "codigo") && has(toks, "city", "ciudad", "municipio", "origen", "origin", "destino", "destination", "dest")):
 		return side + ".code"
 	case has(toks, "state", "departamento", "department", "dept", "estado") && typ != "boolean":
 		return side + ".dept"
 	case has(toks, "city", "ciudad", "municipio"):
 		return side + ".city"
-	case typ == "boolean" && has(toks, "cod", "cobro", "recaudo", "contraentrega", "collect"):
+	case typ == "boolean" && (has(toks, "cod", "cobro", "recaudo", "contraentrega", "collect") || has(toks, "cash") && has(toks, "delivery")):
 		return "cod"
 	case typ == "string" && has(toks, "rate", "tarifa", "modalidad", "payment", "pago", "metodo", "tipo", "type") && has(toks, "rate", "tarifa", "recaudo", "cobro", "cod", "contraentrega", "modalidad", "pago", "payment"):
 		return "rate"
@@ -282,6 +335,42 @@ func toInt(v any) (int64, bool) {
 
 // valueFor converts a known fact to what the field's type wants.
 func valueFor(key string, sch map[string]any, typ string, vals map[string]any) (any, bool) {
+	enum := enumOf(sch)
+	switch key {
+	case "rate":
+		// "with collection" / "without collection": decided by whether the
+		// customer pays on delivery. Without a list of values Dropi's own
+		// wording is used.
+		cod, _ := vals["cod"].(bool)
+		for _, e := range enum {
+			l := strings.ToLower(accents.Replace(e))
+			noCollect := strings.Contains(l, "sin") || strings.Contains(l, "prepago") || strings.Contains(l, "prepaid") ||
+				strings.Contains(l, "anticipado") || strings.Contains(l, "without") || strings.Contains(l, "no_")
+			withCollect := !noCollect && (strings.Contains(l, "recaudo") || strings.Contains(l, "cobro") || strings.Contains(l, "contraentrega") ||
+				strings.Contains(l, "collect") || strings.Contains(l, "cash") || strings.Contains(l, "with") || l == "cod")
+			if cod && withCollect || !cod && noCollect {
+				return e, true
+			}
+		}
+		if len(enum) == 0 && typ == "string" {
+			if cod {
+				return "CON RECAUDO", true
+			}
+			return "SIN RECAUDO", true
+		}
+		return nil, false
+	case "product_type":
+		// Dropi products are SIMPLE unless they have variations.
+		for _, e := range enum {
+			if strings.EqualFold(e, "simple") {
+				return e, true
+			}
+		}
+		if len(enum) == 0 && typ == "string" {
+			return "SIMPLE", true
+		}
+		return nil, false
+	}
 	raw, ok := vals[key]
 	if !ok || raw == nil || raw == "" {
 		return nil, false
@@ -295,19 +384,6 @@ func valueFor(key string, sch map[string]any, typ string, vals map[string]any) (
 			}
 		}
 		raw = digits
-	}
-	enum := enumOf(sch)
-	if key == "rate" {
-		cod, _ := vals["cod"].(bool)
-		for _, e := range enum {
-			l := strings.ToLower(accents.Replace(e))
-			withCollect := strings.Contains(l, "con") && (strings.Contains(l, "recaudo") || strings.Contains(l, "cobro")) || strings.Contains(l, "contraentrega") || l == "cod"
-			noCollect := strings.Contains(l, "sin") || strings.Contains(l, "prepago") || strings.Contains(l, "anticipado")
-			if cod && withCollect && !noCollect || !cod && noCollect {
-				return e, true
-			}
-		}
-		return nil, false
 	}
 	switch typ {
 	case "integer", "number":
@@ -357,7 +433,7 @@ func fillObject(schema map[string]any, prefix []string, vals map[string]any, r *
 				}
 			}
 			if req[name] {
-				r.missing = append(r.missing, strings.Join(toks, "."))
+				r.miss(toks, sub)
 			}
 		case "array":
 			items, _ := sub["items"].(map[string]any)
@@ -370,7 +446,7 @@ func fillObject(schema map[string]any, prefix []string, vals map[string]any, r *
 				}
 			}
 			if req[name] {
-				r.missing = append(r.missing, strings.Join(toks, "."))
+				r.miss(toks, sub)
 			}
 		default:
 			key := classify(toks, typ, inProduct)
@@ -382,7 +458,7 @@ func fillObject(schema map[string]any, prefix []string, vals map[string]any, r *
 				}
 			}
 			if req[name] && !hasDefault {
-				r.missing = append(r.missing, strings.Join(toks, "."))
+				r.miss(toks, sub)
 			}
 		}
 	}
@@ -419,6 +495,17 @@ func quoteTool(tools []Tool) (Tool, bool) {
 
 func quoteVals(in QuoteInput) map[string]any {
 	v := map[string]any{"amount": in.Amount, "cod": in.COD}
+	if in.ProductID != "" {
+		v["product_id"] = in.ProductID
+	}
+	if in.Price > 0 {
+		v["price"] = in.Price
+	}
+	units := in.Units
+	if units <= 0 {
+		units = 1
+	}
+	v["quantity"] = int64(units)
 	if in.OriginDANE != "" {
 		v["origin.code"] = in.OriginDANE
 		if m, ok := geo.ByCode(in.OriginDANE); ok {
@@ -444,9 +531,20 @@ func (m *MCPAPI) Quote(ctx context.Context, in QuoteInput) ([]Quote, error) {
 	if !ok {
 		return nil, errors.New("el MCP de Dropi no tiene una herramienta para cotizar el envío (ver Conexiones > Dropi > Ver herramientas)")
 	}
-	args, r := buildArgs(t, quoteVals(in))
+	vals := quoteVals(in)
+	if err := m.fillIDs(ctx, tools, t, vals); err != nil {
+		return nil, err
+	}
+	args, r := buildArgs(t, vals)
 	if len(r.missing) > 0 {
-		return nil, fmt.Errorf("la herramienta %q del MCP pide datos que el Motor no sabe llenar: %s", t.Name, strings.Join(r.missing, ", "))
+		if in.ProductID == "" {
+			for _, n := range r.missing {
+				if strings.HasPrefix(n, "products") || strings.HasPrefix(n, "product") || strings.HasPrefix(n, "items") {
+					return nil, fmt.Errorf("la cotización de Dropi necesita el producto: escribe el ID de Dropi en Productos (la herramienta %q pide %s)", t.Name, r.missingText())
+				}
+			}
+		}
+		return nil, fmt.Errorf("la herramienta %q del MCP pide datos que el Motor no sabe llenar: %s", t.Name, r.missingText())
 	}
 	res, err := m.C.Call(ctx, t.Name, args)
 	if err != nil {
@@ -661,9 +759,13 @@ func (m *MCPAPI) CreateOrder(ctx context.Context, payload map[string]any) (Order
 	if !ok {
 		return OrderResult{}, errors.New("el MCP de Dropi no tiene una herramienta para crear órdenes: crea la orden a mano en Dropi")
 	}
-	args, r := buildArgs(t, orderVals(payload))
+	vals := orderVals(payload)
+	if err := m.fillIDs(ctx, tools, t, vals); err != nil {
+		return OrderResult{}, fmt.Errorf("%w: crea la orden a mano en Dropi", err)
+	}
+	args, r := buildArgs(t, vals)
 	if len(r.missing) > 0 {
-		return OrderResult{}, fmt.Errorf("la herramienta %q del MCP pide datos que el Motor no sabe llenar (%s): crea la orden a mano en Dropi", t.Name, strings.Join(r.missing, ", "))
+		return OrderResult{}, fmt.Errorf("la herramienta %q del MCP pide datos que el Motor no sabe llenar (%s): crea la orden a mano en Dropi", t.Name, r.missingText())
 	}
 	for _, f := range criticalOrderFields {
 		ok := false
@@ -706,7 +808,7 @@ func (m *MCPAPI) Report(ctx context.Context) ([]Tool, []ToolReport, error) {
 		case !found:
 			rep = append(rep, ToolReport{Job: job, Detail: "No encontré una herramienta para esto."})
 		case len(r.missing) > 0:
-			rep = append(rep, ToolReport{Job: job, Tool: t.Name, Detail: "Pide datos que no sé llenar: " + strings.Join(r.missing, ", ")})
+			rep = append(rep, ToolReport{Job: job, Tool: t.Name, Detail: "Pide datos que no sé llenar: " + r.missingText()})
 		default:
 			b, _ := json.Marshal(args)
 			rep = append(rep, ToolReport{Job: job, Tool: t.Name, Ready: true, Detail: "Enviaría: " + string(b)})
@@ -716,7 +818,10 @@ func (m *MCPAPI) Report(ctx context.Context) ([]Tool, []ToolReport, error) {
 	var qa map[string]any
 	var qr fillResult
 	if ok {
-		qa, qr = buildArgs(qt, quoteVals(QuoteInput{COD: true, Amount: 100000, OriginDANE: "0500100", DestDANE: "1100100"}))
+		qv := quoteVals(QuoteInput{COD: true, Amount: 100000, OriginDANE: "0500100", DestDANE: "1100100", ProductID: "12345", Price: 100000, Units: 1})
+		note := dryIDs(tools, qt, qv)
+		qa, qr = buildArgs(qt, qv)
+		qr.missing = append(qr.missing, note...)
 	}
 	add("Cotizar el envío", qt, ok, qa, qr)
 
@@ -742,7 +847,10 @@ func (m *MCPAPI) Report(ctx context.Context) ([]Tool, []ToolReport, error) {
 	var oa map[string]any
 	var or fillResult
 	if okO {
-		oa, or = buildArgs(ot, orderVals(sampleOrderPayload()))
+		ov := orderVals(sampleOrderPayload())
+		note := dryIDs(tools, ot, ov)
+		oa, or = buildArgs(ot, ov)
+		or.missing = append(or.missing, note...)
 		if len(or.missing) == 0 {
 			for _, f := range criticalOrderFields {
 				got := false
@@ -766,5 +874,301 @@ func sampleOrderPayload() map[string]any {
 		"distributionCompany": "SERVIENTREGA", "rate_type": "CON RECAUDO", "total_order": int64(100000),
 		"products": []map[string]any{{"id": "12345", "price": int64(100000), "quantity": 1}},
 		"origen":   "Bogotá",
+	}
+}
+
+// ---------- Dropi's own ids for cities ----------
+
+var (
+	cityWant = toolWant{
+		all:    [][]string{{"city", "cities", "ciudad*", "municipio*", "municipalit*"}},
+		prefer: []string{"list", "get", "search", "buscar*", "listar*", "department*", "departamento*"},
+		avoid: []string{"order*", "orden*", "quote*", "cotiz*", "product*", "producto*", "carrier*", "transportadora*",
+			"crear*", "create*", "shipping", "envio*", "category*", "categoria*", "categories"},
+	}
+	deptWant = toolWant{
+		all:    [][]string{{"department*", "departamento*", "state*", "region*"}},
+		prefer: []string{"list", "get", "listar*"},
+		avoid:  cityWant.avoid,
+	}
+)
+
+// leafKeys lists what every field of a schema means (see classify).
+func leafKeys(schema map[string]any, prefix []string, inProduct bool, out map[string]bool) {
+	props, _ := schema["properties"].(map[string]any)
+	for name, v := range props {
+		sub, _ := v.(map[string]any)
+		if sub == nil {
+			continue
+		}
+		toks := append(append([]string{}, prefix...), words(name)...)
+		switch typ := typeOf(sub); typ {
+		case "object":
+			leafKeys(sub, toks, inProduct, out)
+		case "array":
+			if items, _ := sub["items"].(map[string]any); items != nil {
+				leafKeys(items, toks, true, out)
+			}
+		default:
+			if k := classify(toks, typ, inProduct); k != "" {
+				out[k] = true
+			}
+		}
+	}
+}
+
+// idSides says for which side (dest / origin) the tool wants Dropi's own
+// city or department id (a DANE code is not enough for those fields).
+func idSides(t Tool) map[string][2]bool {
+	keys := map[string]bool{}
+	leafKeys(t.Schema, nil, false, keys)
+	out := map[string][2]bool{}
+	for _, side := range []string{"dest", "origin"} {
+		c, d := keys[side+".cityid"], keys[side+".deptid"]
+		if c || d {
+			out[side] = [2]bool{c, d}
+		}
+	}
+	return out
+}
+
+// dryIDs is fillIDs for the report: no network, it only checks that there is a
+// tool able to answer, and fills a placeholder so the rest can be judged.
+func dryIDs(tools []Tool, t Tool, vals map[string]any) (missing []string) {
+	sides := idSides(t)
+	if len(sides) == 0 {
+		return nil
+	}
+	ct, ok := pickTool(tools, cityWant)
+	if !ok {
+		return []string{"(el id de la ciudad en Dropi: no hay herramienta de ciudades)"}
+	}
+	for side, want := range sides {
+		if want[0] {
+			vals[side+".cityid"] = int64(1)
+		}
+		if want[1] {
+			vals[side+".deptid"] = int64(1)
+		}
+	}
+	_ = ct
+	return nil
+}
+
+// fillIDs looks up Dropi's own ids (city, department) when the tool asks for
+// them, using the MCP's own cities tool. Results are remembered.
+func (m *MCPAPI) fillIDs(ctx context.Context, tools []Tool, t Tool, vals map[string]any) error {
+	for side, want := range idSides(t) {
+		city, _ := vals[side+".city"].(string)
+		dept, _ := vals[side+".dept"].(string)
+		if strings.TrimSpace(city) == "" {
+			continue // the normal "missing" message will name it
+		}
+		cid, did, err := m.lookupCity(ctx, tools, dept, city)
+		if err != nil {
+			return err
+		}
+		if want[0] {
+			vals[side+".cityid"] = cid
+		}
+		if want[1] && did > 0 {
+			vals[side+".deptid"] = did
+		}
+	}
+	return nil
+}
+
+func canon(s string) string {
+	n := geo.Normalize(s)
+	for _, suf := range []string{" d c", " dc"} {
+		n = strings.TrimSuffix(n, suf)
+	}
+	return n
+}
+
+func nameOf(o map[string]any) string {
+	return canon(str(o, "name", "nombre", "city", "ciudad", "municipio", "description", "label"))
+}
+
+type cityCand struct {
+	obj map[string]any
+	anc []map[string]any
+}
+
+func collectNamed(v any, target string) []cityCand {
+	var out []cityCand
+	var walk func(x any, anc []map[string]any, depth int)
+	walk = func(x any, anc []map[string]any, depth int) {
+		if depth > 8 {
+			return
+		}
+		switch t := x.(type) {
+		case map[string]any:
+			if nameOf(t) == target && idStr(t, "id", "city_id", "ciudad_id", "value") != "" {
+				out = append(out, cityCand{obj: t, anc: append([]map[string]any(nil), anc...)})
+			}
+			next := append(append([]map[string]any(nil), anc...), t)
+			for _, c := range t {
+				walk(c, next, depth+1)
+			}
+		case []any:
+			for _, c := range t {
+				walk(c, anc, depth+1)
+			}
+		}
+	}
+	walk(v, nil, 0)
+	return out
+}
+
+func inDept(c cityCand, dept string) bool {
+	if dept == "" {
+		return false
+	}
+	for _, a := range c.anc {
+		if nameOf(a) == dept {
+			return true
+		}
+	}
+	for _, k := range []string{"department", "departamento", "state", "department_name", "departamento_nombre"} {
+		switch d := c.obj[k].(type) {
+		case string:
+			if canon(d) == dept {
+				return true
+			}
+		case map[string]any:
+			if nameOf(d) == dept {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// pickCity chooses the city that belongs to the department.
+func pickCity(v any, dept, city string) (cityID, deptID int64, err error) {
+	cands := collectNamed(v, canon(city))
+	if len(cands) == 0 {
+		return 0, 0, fmt.Errorf("Dropi no tiene la ciudad %q en su lista", city)
+	}
+	dn := canon(dept)
+	var pick *cityCand
+	for i := range cands {
+		if inDept(cands[i], dn) {
+			pick = &cands[i]
+			break
+		}
+	}
+	if pick == nil {
+		if len(cands) > 1 && dn != "" {
+			return 0, 0, fmt.Errorf("Dropi tiene varias ciudades llamadas %q y ninguna en %q", city, dept)
+		}
+		pick = &cands[0]
+	}
+	cityID, _ = toInt(idStr(pick.obj, "id", "city_id", "ciudad_id", "value"))
+	if d := idStr(pick.obj, "department_id", "departmentId", "state_id", "departamento_id", "id_department"); d != "" {
+		deptID, _ = toInt(d)
+	}
+	if deptID == 0 {
+		for i := len(pick.anc) - 1; i >= 0; i-- {
+			if nameOf(pick.anc[i]) == dn {
+				deptID, _ = toInt(idStr(pick.anc[i], "id", "department_id", "value"))
+				break
+			}
+		}
+	}
+	return cityID, deptID, nil
+}
+
+// lookupCity finds Dropi's ids for a city with the MCP's cities tool.
+func (m *MCPAPI) lookupCity(ctx context.Context, tools []Tool, dept, city string) (int64, int64, error) {
+	key := canon(dept) + "|" + canon(city)
+	m.idMu.Lock()
+	if m.ids == nil {
+		m.ids = map[string]int64{}
+	}
+	cid, ok := m.ids["c|"+key]
+	did := m.ids["d|"+key]
+	m.idMu.Unlock()
+	if ok {
+		return cid, did, nil
+	}
+	ct, found := pickTool(tools, cityWant)
+	if !found {
+		return 0, 0, fmt.Errorf("el MCP de Dropi no tiene una herramienta de ciudades para saber el id de %q (ver Conexiones > Dropi > Diagnóstico)", city)
+	}
+	vals := map[string]any{"dest.city": city, "dest.dept": dept, "name": city, "fullname": city}
+	args, r := buildArgs(ct, vals)
+	addSearchText(ct, args, city)
+	if len(r.missing) > 0 {
+		// Probably it wants the department's id first.
+		dt, ok2 := pickTool(tools, deptWant)
+		if !ok2 || dt.Name == ct.Name {
+			return 0, 0, fmt.Errorf("la herramienta de ciudades %q del MCP pide datos que el Motor no sabe llenar: %s", ct.Name, r.missingText())
+		}
+		dargs, dr := buildArgs(dt, map[string]any{"dest.dept": dept, "name": dept, "fullname": dept})
+		addSearchText(dt, dargs, dept)
+		if len(dr.missing) > 0 {
+			return 0, 0, fmt.Errorf("la herramienta de departamentos %q del MCP pide datos que el Motor no sabe llenar: %s", dt.Name, dr.missingText())
+		}
+		res, err := m.C.Call(ctx, dt.Name, dargs)
+		if err != nil {
+			return 0, 0, m.note(err)
+		}
+		var dv any
+		if json.Unmarshal(res.JSON(), &dv) != nil {
+			return 0, 0, fmt.Errorf("respuesta de departamentos inválida: %s", snippet([]byte(res.Text)))
+		}
+		dc := collectNamed(dv, canon(dept))
+		if len(dc) == 0 {
+			return 0, 0, fmt.Errorf("Dropi no tiene el departamento %q en su lista", dept)
+		}
+		deptID, _ := toInt(idStr(dc[0].obj, "id", "department_id", "value"))
+		vals["dest.deptid"] = deptID
+		args, r = buildArgs(ct, vals)
+		addSearchText(ct, args, city)
+		if len(r.missing) > 0 {
+			return 0, 0, fmt.Errorf("la herramienta de ciudades %q del MCP pide datos que el Motor no sabe llenar: %s", ct.Name, r.missingText())
+		}
+	}
+	res, err := m.C.Call(ctx, ct.Name, args)
+	if err != nil {
+		return 0, 0, m.note(err)
+	}
+	var v any
+	if json.Unmarshal(res.JSON(), &v) != nil {
+		return 0, 0, fmt.Errorf("respuesta de ciudades inválida: %s", snippet([]byte(res.Text)))
+	}
+	cid, did, err = pickCity(v, dept, city)
+	if err != nil {
+		return 0, 0, err
+	}
+	m.idMu.Lock()
+	m.ids["c|"+key], m.ids["d|"+key] = cid, did
+	m.idMu.Unlock()
+	return cid, did, nil
+}
+
+// addSearchText puts text in the tool's free-text search field, when it has one
+// that nothing else filled.
+func addSearchText(t Tool, args map[string]any, text string) {
+	props, _ := t.Schema["properties"].(map[string]any)
+	names := make([]string, 0, len(props))
+	for n := range props {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		sub, _ := props[n].(map[string]any)
+		if sub == nil || typeOf(sub) != "string" {
+			continue
+		}
+		if _, set := args[n]; set {
+			continue
+		}
+		if has(words(n), "query", "q", "search", "term", "texto", "keyword", "buscar", "busqueda", "filter", "filtro") {
+			args[n] = text
+			return
+		}
 	}
 }

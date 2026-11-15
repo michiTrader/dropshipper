@@ -164,13 +164,14 @@ function dropiMcpBlock(d) {
   if (d.mcp_conectado) {
     const since = d.mcp_desde ? new Date(d.mcp_desde).toLocaleString('es-CO') : '';
     return notice('ok', `<b>Conectado con tu inicio de sesión de Dropi</b>${since ? ' (desde ' + esc(since) + ')' : ''}. El Motor renueva la sesión solo; si Dropi la cierra, aquí te avisaremos.`) +
-      `<div class="form-actions" style="margin:6px 0 12px"><button class="btn" type="button" id="dpMcpTools">${ic('search', 14)} Ver herramientas</button><span class="spacer"></span><button class="btn danger" type="button" id="dpMcpOff">Desconectar</button></div><div class="testres" id="dpMcpReport"></div>`;
+      `<div class="form-actions" style="margin:6px 0 12px"><button class="btn" type="button" id="dpMcpTools">${ic('search', 14)} Ver herramientas</button><button class="btn" type="button" id="dpMcpTry">${ic('search', 14)} Probar cotización</button><button class="btn" type="button" id="dpMcpSchemas">Copiar esquemas</button><button class="btn" type="button" id="dpMcpLog">Ver registro</button><span class="spacer"></span><button class="btn danger" type="button" id="dpMcpOff">Desconectar</button></div><div class="testres" id="dpMcpReport"></div><pre class="small" id="dpMcpDebug" style="display:none;white-space:pre-wrap;max-height:320px;overflow:auto;user-select:all"></pre>`;
   }
   return notice('info', '<b>Cómo conectarlo:</b> pulsa <b>Conectar con Dropi</b>, inicia sesión en la página de Dropi que se abre y acepta el acceso. No tienes que copiar ningún token.') +
     `<div class="form-actions" style="margin:6px 0 12px"><button class="btn primary" type="button" id="dpMcpConnect">${ic('truck', 14)} Conectar con Dropi</button></div>`;
 }
 
 function bindDropiMcp(d) {
+  bindDropiMcpDebug();
   const on = $('#dpMcpConnect');
   if (on) on.onclick = (e) => busy(e.currentTarget, async () => {
     try {
@@ -207,6 +208,44 @@ function bindDropiMcp(d) {
       box.className = 'testres ok';
       box.innerHTML = `<b>Lo que el Motor puede hacer con Dropi</b><ul style="margin:6px 0 10px 18px">${rows}</ul><details><summary>Herramientas que ofrece Dropi (${(r.herramientas || []).length})</summary><ul style="margin:6px 0 0 18px">${names}</ul></details>`;
     } catch (err) { box.className = 'testres bad'; box.textContent = err.message; }
+  });
+}
+
+// Debug helpers: show raw text the owner can copy and send for diagnosis.
+function dpDebugShow(text) {
+  const pre = $('#dpMcpDebug');
+  if (!pre) return;
+  pre.style.display = 'block';
+  pre.textContent = text;
+  try { navigator.clipboard.writeText(text).then(() => toast('Copiado al portapapeles.')); } catch (e) { /* the text is selectable anyway */ }
+}
+
+function bindDropiMcpDebug() {
+  const schemas = $('#dpMcpSchemas');
+  if (schemas) schemas.onclick = (e) => busy(e.currentTarget, async () => {
+    try {
+      const r = await api('/api/dropi/mcp/esquemas');
+      if (!r.ok) return dpDebugShow(r.error);
+      dpDebugShow(JSON.stringify(r.herramientas, null, 1));
+    } catch (err) { dpDebugShow(err.message); }
+  });
+  const log = $('#dpMcpLog');
+  if (log) log.onclick = (e) => busy(e.currentTarget, async () => {
+    try {
+      const r = await api('/api/dropi/mcp/registro');
+      if (!r.ok) return dpDebugShow(r.error);
+      const l = r.llamadas || [];
+      dpDebugShow(l.length ? l.map(x => `[${x.hora}] ${x.herramienta} (${x.ms} ms)\nENVIADO: ${x.argumentos}\nRESPUESTA: ${x.respuesta}${x.error ? '\nERROR: ' + x.error : ''}`).join('\n\n') : 'Todavía no hay llamadas a Dropi. Pulsa «Probar cotización».');
+    } catch (err) { dpDebugShow(err.message); }
+  });
+  const tryq = $('#dpMcpTry');
+  if (tryq) tryq.onclick = (e) => busy(e.currentTarget, async () => {
+    try {
+      const r = await post('/api/dropi/mcp/probar-cotizacion', { departamento: 'Antioquia', ciudad: 'Medellín' });
+      const reg = await api('/api/dropi/mcp/registro');
+      const calls = (reg.llamadas || []).slice(-3).map(x => `${x.herramienta}\nENVIADO: ${x.argumentos}\nRESPUESTA: ${x.respuesta}${x.error ? '\nERROR: ' + x.error : ''}`).join('\n\n');
+      dpDebugShow((r.ok ? 'COTIZACIÓN: ' + JSON.stringify(r.resultado) : 'FALLÓ: ' + r.error) + '\n\n' + calls);
+    } catch (err) { dpDebugShow(err.message); }
   });
 }
 

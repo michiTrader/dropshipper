@@ -134,6 +134,19 @@ func (s *Seller) Respond(ctx context.Context, phone string) (Reply, error) {
 				msgs = append(msgs, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
 				continue
 			}
+			// Never let the model present a cancelled/rejected order as alive.
+			if orders, err := s.Store.OrdersFor(ctx, phone); err == nil {
+				if o := closedClaim(m.Content, orders); o != nil {
+					s.Store.Audit(ctx, phone, "sistema", "correccion_ia", fmt.Sprintf("dijo que el pedido #%d seguía activo pero está %s: %s", o.ID, o.Status, truncate(m.Content, 120)))
+					if nudges < 2 {
+						nudges++
+						msgs = append(msgs, llm.Message{Role: "assistant", Content: m.Content}, llm.Message{Role: "user", Content: nudgeClosed(*o)})
+						continue
+					}
+					out.Bubbles = SplitBubbles(closedFallback(*o))
+					return out, nil
+				}
+			}
 			if nudges < 2 {
 				if note := needsNudge(m.Content, called); note != "" {
 					nudges++
@@ -399,32 +412,8 @@ Ayudar de verdad al cliente y cerrar la venta de forma natural y ética: entende
 	if c.Notes != "" {
 		fmt.Fprintf(&b, "Tus notas sobre este cliente: %s\n", c.Notes)
 	}
-	if o, err := s.Store.OpenOrderFor(ctx, c.Phone); err == nil {
-		fmt.Fprintf(&b, "Pedido abierto #%d · producto: %s · estado: %s · oferta: %s · total: $%s\n", o.ID, o.ProductName, o.Status, firstNonEmpty(o.OfferLabel, "sin elegir"), catalog.FormatCOP(o.Total))
-		if m := sales.Missing(o); len(m) > 0 {
-			fmt.Fprintf(&b, "Datos que faltan: %s\n", strings.Join(m, ", "))
-		}
-		switch o.Status {
-		case store.OrderAwaitPayment:
-			fmt.Fprintf(&b, "Esperando el anticipo de $%s (estado del pago: %s). Si el cliente pregunta, recuérdale que envíe el comprobante.\n", catalog.FormatCOP(o.AdvanceAmount), o.PaymentStatus)
-		case store.OrderPendingApprove:
-			b.WriteString("El pedido ya está confirmado y en revisión para despacho. No lo vuelvas a confirmar. Si el cliente pregunta por la guía, dile que apenas el equipo la registre le llega por este chat; no prometas fecha.\n")
-		}
-	} else if orders, err := s.Store.OrdersFor(ctx, c.Phone); err == nil && len(orders) > 0 {
-		o := orders[0]
-		fmt.Fprintf(&b, "Último pedido #%d · estado: %s", o.ID, o.Status)
-		if o.TrackingNumber != "" {
-			fmt.Fprintf(&b, " · guía %s (%s)", o.TrackingNumber, o.Carrier)
-		}
-		b.WriteString(". " + sales.StatusNote(o) + "\n")
-		if sales.Closed(o) {
-			b.WriteString("Ese pedido NO se va a enviar. Nunca le digas al cliente que va en camino, que lo recibirá ni que espere una guía. Si escribe \"sí\", \"ya\" o pregunta por su pedido, se refiere a ESTE pedido: explícale lo que pasó. Si pide intentarlo de nuevo, toma sus datos con guardar_datos_pedido como un pedido nuevo.\n")
-			return b.String()
-		}
-		b.WriteString("Si el cliente escribe \"sí\", \"ya\" o pregunta por su pedido, se refiere a ESTE pedido: dile en qué estado está y que debe esperar la guía. NO crees otro pedido. Solo si pide comprar otra vez, pregúntale de forma explícita si quiere un pedido adicional y, únicamente si lo confirma, usa guardar_datos_pedido con nuevo_pedido=true.\n")
-	} else {
-		b.WriteString("Sin pedidos todavía.\n")
-	}
+	orders, _ := s.Store.OrdersFor(ctx, c.Phone)
+	b.WriteString(orderStateText(orders))
 	return b.String()
 }
 
